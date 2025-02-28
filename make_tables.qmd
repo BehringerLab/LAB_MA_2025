@@ -1,0 +1,1190 @@
+---
+title: "make_tables_for_paper"
+format: html
+editor: source
+---
+
+# Load packages
+
+```{r}
+library(tidyverse)
+library(here)
+library(rtracklayer)
+library(Biostrings)
+library(readxl)
+library(fitdistrplus)
+library(scales)
+library(ggtext)
+library(ggplotify)
+```
+
+# Importing and wrangling data
+
+## Functions
+
+```{r functions}
+oget <- function(species_letter, object_string) {
+  get(paste0(species_letter, object_string))
+}
+
+
+# function to import fna files and assign the correct chromosome name
+# remember that the fna files in this dir have already had any non chomosomal sequences removed
+import_fna <-
+  function(fna_path, chrom_name){
+    # import the fna
+    in_fna = readDNAStringSet(fna_path)
+    # set the proper chromosome name
+    names(in_fna) = chrom_name
+    # set topology to circular
+    isCircular(seqinfo(in_fna)) = TRUE
+    return(in_fna)
+  }
+
+import_gff <-
+  function(gff_path, species_letter){
+    # get the species fna
+    in_fna <- get(paste0(species_letter, '_fna'))
+    # setup the genome info from the fna for the gff
+    in_seqinfo <- Seqinfo(seqname = names(in_fna),
+                          width(in_fna),
+                          isCircular = TRUE,
+                          genome = species_letter)
+    # import the gff
+    in_gff <- import.gff3(gff_path)
+    # assign seqinfo to the imported gff
+    seqinfo(in_gff) <- in_seqinfo
+    return(in_gff)
+  }
+
+import_vcf_df <-
+  function(snpEff_vcf_path, species_letter){
+    in_vcf_df <-
+      # read in the vcf file
+ # read in vcf as tsv
+read_tsv(snpEff_vcf_path,
+         comment = '##',
+         show_col_types = FALSE) |>
+# split info column into individual metrics
+  separate_wider_delim(cols = INFO,
+                       delim = ';',
+                       names = c('AC', 'AF', 'AN', 'BaseQRankSum', 'DP', 'FS', 'MLEAC', 'MLEAF', 'MQ', 'MQRankSum', 'Q', 'ReadPosRankSum', 'SOR', 'ANN', 'LOF'),
+                       too_few = 'align_start') |>
+# pivot longer so each line is no longer its own column
+  pivot_longer(cols = contains('MB'),
+               names_to = 'line',
+               values_to = 'line_var_info') |>
+# remove non variant sites
+  filter(substring(line_var_info, 1, 1) != '0') |>
+  dplyr::rename('chrom' = "#CHROM") |>
+# get the allele for each line
+  # trim the leading 'ANN' string from the ANN column
+
+  group_by(line, POS, chrom) |>
+  mutate(ALT = strsplit(ALT, ',')[[1]][strsplit(line_var_info, ':')[[1]][1] |> as.numeric()],
+         ANN = substring(ANN, 5, nchar(ANN)) |> strsplit(x = _, ',')) |> 
+  unnest(ANN) |> 
+  mutate(ann_allele = strsplit(ANN, '\\|')[[1]][1]) |> 
+  ungroup() |> 
+  filter(ALT == ann_allele) |> 
+# remove info columns that we don't need anymore (we already hard filtered these)
+  dplyr::select(-c('AC', 'AF', 'AN', 'BaseQRankSum', 'DP', 'FS', 'MLEAC', 'MLEAF', 'MQ', 'MQRankSum', 'Q', 'ReadPosRankSum', 'SOR', 'ID', 'FILTER', 'QUAL', 'FORMAT', 'line_var_info', 'ann_allele')) |> 
+# get ANN to be a comma separated string of annotations
+  nest_by(chrom, POS, REF, ALT, LOF, line, .key = 'ANN') |>
+  unnest_wider(col = 'ANN') |>
+  group_by(across(c(-ANN))) |>
+  mutate(ANN = unlist(ANN)  |> paste0(collapse = ',')) |>
+  ungroup() |>
+      
+      
+  # fix miscalled L. crispatus CRISPR deletions
+# The deletion in line 018 is actually a deletion of the bases 1001320-1001351.
+# The deletion in line 061 is actually a deletion of the bases 1001380-1001412.
+# The deletion in line 065 is actually a deletion of the bases 1001259-1001290.
+# The deletion in line 115 is actually a deletion of the bases 962806-962838.
+  mutate(
+    REF = case_when(line == "8855-MB-018_S1_L005" & POS == 1001290 ~ "TCAAAATCAACTAAAACGACCGTAGAATCGCTC",
+                    line == "8855-MB-061_S1_L005" & POS == 1001351 ~ "CTATTAGTGTCTCTGCCGGCATTTTCACGATGAT",
+                    line == "8855-MB-065_S1_L005" & POS == 1001229 ~ "TAGTTGCCCTGATACCGAACGGGATCCGTACCG",
+                    line == "8855-MB-115_S1_L005" & POS == 962777 ~ "CCTTGTTGACGCTCCCACATCAAATGCAAAATCA",
+                    TRUE ~ REF),
+    ALT = case_when(line == "8855-MB-018_S1_L005" & POS == 1001290 ~ "T",
+                    line == "8855-MB-061_S1_L005" & POS == 1001351 ~ "C",
+                    line == "8855-MB-065_S1_L005" & POS == 1001229 ~ "T",
+                    line == "8855-MB-115_S1_L005" & POS == 962777 ~ "C",
+                    TRUE ~ ALT),
+    POS = case_when(line == "8855-MB-018_S1_L005" & POS == 1001290 ~ 1001319,
+                    line == "8855-MB-061_S1_L005" & POS == 1001351 ~ 1001379,
+                    line == "8855-MB-065_S1_L005" & POS == 1001229 ~ 1001258,
+                    line == "8855-MB-115_S1_L005" & POS == 962777 ~ 962805,
+                    TRUE ~ POS)) |>
+# format variants
+      
+    
+      mutate(
+        mut_type = case_when(
+          ALT == '*' ~ 'spanning_deletion',
+          nchar(REF) == 1 & nchar(ALT) == 1 & REF != ALT ~ 'SNM',
+          nchar(REF) > nchar(ALT) ~ 'DEL',
+          nchar(REF) < nchar(ALT) ~ 'INS',
+          REF == ALT ~ 'none',
+          TRUE ~ NA),
+        mut_length = case_when(
+          mut_type == 'DEL' | mut_type == 'INS' ~ nchar(ALT) - nchar(REF),
+          TRUE ~ NA),
+        ts_tv = case_when(
+          mut_type == 'SNM' & (REF == 'A' & ALT == 'G' | REF == 'G' & ALT == 'A' | REF == 'C' & ALT == 'T' | REF == 'T' & ALT == 'C') ~ 'transition',
+          mut_type == 'SNM' ~ 'transversion',
+          TRUE ~ NA),
+        SNM_type = case_when(
+          mut_type == 'SNM' & (REF == 'A' & ALT == 'G' |  REF == 'T' & ALT == 'C') ~ 'A:T > G:C',
+          mut_type == 'SNM' & (REF == 'A' & ALT == 'C' |  REF == 'T' & ALT == 'G') ~ 'A:T > C:G',
+          mut_type == 'SNM' & (REF == 'A' & ALT == 'T' |  REF == 'T' & ALT == 'A') ~ 'A:T > T:A',
+          mut_type == 'SNM' & (REF == 'C' & ALT == 'T' |  REF == 'G' & ALT == 'A') ~ 'G:C > A:T',
+          mut_type == 'SNM' & (REF == 'C' & ALT == 'G' |  REF == 'G' & ALT == 'C') ~ 'G:C > C:G',
+          mut_type == 'SNM' & (REF == 'C' & ALT == 'A' |  REF == 'G' & ALT == 'T') ~ 'G:C > T:A'),
+       
+        range_start = case_when(mut_type == 'DEL' ~ POS + 1,
+                                TRUE ~ POS),
+        range_end = case_when(mut_type == 'DEL' ~ POS + (-1 * mut_length),
+                              TRUE ~ POS),
+        species = species_letter)
+    
+    return(in_vcf_df)
+  }
+
+# function to convert the previously formatted vcf dfs into grange objects
+vcf_df_to_granges <- 
+  function(vcf_df, species_letter){
+    vcf_granges =
+      makeGRangesFromDataFrame(df = vcf_df |>
+                                      mutate(seqnames = rep(names(get(paste0(species_letter, '_fna'))), nrow(vcf_df))),
+                               ignore.strand = TRUE,
+                               keep.extra.columns = TRUE,
+                               seqnames.field = 'seqnames')
+    isCircular(seqinfo(vcf_granges)) = TRUE
+    return(vcf_granges)
+  }
+```
+
+## Import MA data
+
+```{r import_data}
+# set vcf paths
+a_vcf_path <- here('clean', 'vcf_files', "L_acidophilus_MA.gatk.hardFiltered.contamRemoved.manualSiteFiltered.noAncestor.snpEff.vcf")
+c_vcf_path <- here('clean', 'vcf_files', "L_crispatus_MA.gatk.hardFiltered.contamRemoved.manualSiteFiltered.noAncestor.snpEff.vcf")
+l_vcf_path <- here('clean', 'vcf_files', "L_lactis_MA.gatk.hardFiltered.chromosomal.contamRemoved.manualSiteFiltered.noAncestor.snpEff.vcf")
+
+# import chromosome fna
+a_fna <-
+  import_fna(
+    fna_path = here('clean',
+                    'reference_genome_fastas',
+                    'lactobacillus_acidophilus.fna'),
+    chrom_name = '6961b780eb5148ee_1')
+
+c_fna <-
+  import_fna(
+    fna_path = here('clean',
+                    'reference_genome_fastas',
+                    'lactobacillus_crispatus.fna'),
+    chrom_name = 'NZ_CP072197.1')
+
+l_fna <-
+  import_fna(
+    fna_path = here('clean',
+                    'reference_genome_fastas',
+                    'lactococcus_lactis_no_plasmids.fna'),
+    chrom_name = '6844634a21f9468f_1')
+
+l_withPlasmids_fna <- readDNAStringSet(here('clean', 'reference_genome_fastas', 'lactococcus_lactis.fna'))
+
+# import chromosome gff
+a_gff <-
+  import_gff(
+    gff_path = here('clean',
+                    'reference_gff_annotations',
+                    'acidophilus.gbk.gff'),
+                    species_letter = 'a')
+c_gff <-
+  import_gff(
+    gff_path = here('clean',
+                    'reference_gff_annotations',
+                    'crispatus.gbk.gff'),
+    species_letter = 'c')
+
+l_gff <-
+  import_gff(
+    gff_path = here('clean',
+                    'reference_gff_annotations',
+                    'lactis_noPlasmids.gbk.gff'),
+   species_letter = 'l')
+
+l_withPlasmids_gff <- import.gff3(here('clean', 'reference_gff_annotations', 'lactis_withPlasmids.gbk.gff'))
+
+# import chromosome vcf as df
+a_vcf_df <- 
+  # import vcf as dataframe
+  import_vcf_df(
+    snpEff_vcf_path = a_vcf_path,
+    species_letter = 'a') |>
+  # handle edge case variant
+  mutate(
+    mut_type = case_when(
+      POS == 461677 & ALT == 'TT' ~ 'SNM',
+      TRUE ~ mut_type),
+    ts_tv = case_when(
+      POS == 461677 & ALT == 'TT' ~ 'transversion',
+      TRUE ~ ts_tv),
+    SNM_type = case_when(
+      POS == 461677 & ALT == 'TT' ~ 'A:T > T:A',
+      TRUE ~ SNM_type),
+    REF = case_when(
+      POS == 461677 & ALT == 'TT' ~ 'A',
+      TRUE ~ REF),
+    ALT = case_when(
+      POS == 461677 & ALT == 'TT' ~ 'T',
+      TRUE ~ ALT)) 
+
+c_vcf_df <-
+  import_vcf_df(
+    snpEff_vcf_path = c_vcf_path,
+     species_letter = 'c')  |>
+  filter(!(line %in% c("8855-MB-072_S1_L005", "8855-MB-136_S1_L005"))) # remove duplicates
+
+
+l_vcf_df <-
+  import_vcf_df(
+    snpEff_vcf_path = l_vcf_path,
+    species_letter = 'l')
+
+a_line_names <- 
+  read_tsv(
+    a_vcf_path,
+    comment = '##',
+    show_col_types = FALSE) |> 
+  dplyr::select(contains('-MB-')) |>
+  colnames()
+
+c_line_names <- 
+  read_tsv(
+    c_vcf_path,
+    comment = '##',
+    show_col_types = FALSE) |> 
+  dplyr::select(contains('-MB-')) |> 
+  colnames() 
+c_line_names <- c_line_names[which(!(c_line_names %in% c("8855-MB-072_S1_L005", "8855-MB-136_S1_L005") ))]
+
+l_line_names <- 
+  read_tsv(l_vcf_path,
+         comment = '##',
+         show_col_types = FALSE) |> 
+  dplyr::select(contains('-MB-')) |>
+  colnames() 
+
+all_lines <- c(a_line_names, c_line_names, l_line_names)
+
+sv <-
+  read_excel(
+    path = here('clean',
+                'structural_variant_calls',
+                'structural_variants_contam_removed.xlsx')) |> 
+  mutate(start = case_when(!is.na(transposition_destination) ~ transposition_destination,
+                           TRUE ~ del_inv_dup_start),
+         end = case_when(!is.na(transposition_destination) ~ transposition_destination,
+                           TRUE ~ del_inv_dup_end),
+         seqnames = case_when(species == 'acidophilus' ~ names(a_fna),
+                              species == 'crispatus' ~ names(c_fna),
+                              species == 'lactis' ~ names(l_fna)),
+         sv_type = case_when(grepl('transposition', event_type) ~ 'transposition',
+                             grepl('deletion', event_type) ~ 'deletion',
+                             grepl('duplication', event_type) ~ 'duplication',
+                             TRUE ~ 'error')) |>
+  makeGRangesFromDataFrame(ignore.strand = TRUE,
+                           keep.extra.columns = TRUE)
+```
+
+## Convert the imported VCF and fasta data to GRanges objects
+
+```{r to_GRanges}
+# create vcf grange objects
+a_vcf_granges <- vcf_df_to_granges(vcf_df = a_vcf_df, species_letter = 'a')
+c_vcf_granges <- vcf_df_to_granges(vcf_df = c_vcf_df, species_letter = 'c')
+l_vcf_granges <- vcf_df_to_granges(vcf_df = l_vcf_df, species_letter = 'l')
+
+# make vcf_grange list
+acl_vcf_granges <- GRangesList(a_vcf_granges, c_vcf_granges, l_vcf_granges)
+names(acl_vcf_granges) <- c('a', 'c', 'l')
+
+# add seqinfo to vcf grange objects
+seqinfo(a_vcf_granges) <- seqinfo(a_fna)
+seqinfo(c_vcf_granges) <- seqinfo(c_fna)
+seqinfo(l_vcf_granges) <- seqinfo(l_fna)
+
+# convert fasta into granges
+a_fna_range <- GRanges(seqnames = names(a_fna), ranges = 1:a_fna@ranges@width, seqinfo = seqinfo(a_fna))
+c_fna_range <- GRanges(seqnames = names(c_fna), ranges = 1:c_fna@ranges@width, seqinfo = seqinfo(c_fna))
+l_fna_range <- GRanges(seqnames = names(l_fna), ranges = 1:l_fna@ranges@width, seqinfo = seqinfo(l_fna))
+```
+
+### Identify complex mutations
+
+```{r}
+# define function to identify complex mutations
+find_complex_mutations <-
+  function(in_vcf_grange, complex_distance){
+    # set default complex distance
+    if(missing(complex_distance)) {complex_distance = 50}
+    # split grange into list by line
+    glist = split(in_vcf_grange, mcols(in_vcf_grange)$line)
+    # identify complex mutations in each line
+    glist_complex <- 
+      lapply(glist, FUN = function(x) {
+        line_grange = x
+        # get distance to nearest mutation
+        gr = distanceToNearest(line_grange, ignore.strand = TRUE)
+        # filter for mutations within 50 bp
+        gr = gr[(elementMetadata(gr)$distance < complex_distance)] # less than because distance starts at 0
+        # get indices for complex mutations
+        complex_indices = c(gr@from, gr@to) # @from and @to get the queryHits and subjectHits, respectively
+        # make the complex metadata column with FALSE as the default value
+        mcols(line_grange)$complex_mutation = FALSE
+        # make complex_mutation TRUE if it's in complex_indices
+        mcols(line_grange)$complex_mutation[complex_indices] = TRUE # mark the complex mutations
+        return(line_grange)
+      })
+    # coerce the newly annotated GRangeList to a normal GRanges object
+    out_granges =
+        GRangesList(glist_complex) |>
+        as.data.frame() |>
+        mutate(line = group_name) |>
+        dplyr::select(-group, -group_name, -seqnames) |>
+        GRanges()
+  }
+
+# identify complex mutations
+acl_vcf_granges <- lapply(acl_vcf_granges, find_complex_mutations)
+a_vcf_granges <- acl_vcf_granges[['a']]
+c_vcf_granges <- acl_vcf_granges[['c']]   
+l_vcf_granges <- acl_vcf_granges[['l']]
+```
+
+### Define constants
+
+```{r define_constants}
+# number of lines
+a_num_lines <- length(a_line_names)
+c_num_lines <- length(c_line_names)
+l_num_lines <- length(l_line_names)
+
+# import cfu count data
+cfu_data <- read_excel(here('clean', 'generation_cfu_data.xlsx')) 
+
+# function to calculate the Ne of a MA population based on colony CFUs
+cfu_to_Ne <-
+  function(cfu){
+    # calculate number of generations
+    num_gens = log(cfu) / log(2)
+    # here we are overestimating the number of generations to get a conservative estimate of Ne. The real Ne is lower than the value calculated here
+    round_up_num_gens = ceiling(num_gens) 
+    # make list of generations
+    gen_list = seq(0, round_up_num_gens)
+    # make list of census size at each generation
+    gen_census_pop = 2^gen_list
+
+    # Ne is the harmonic mean of the census population size between transfers
+    Ne = round_up_num_gens / (sum(gen_census_pop^-1))
+    return(Ne)
+  }
+
+ma_Ne <-
+  cfu_data |>
+  rowwise() |>
+  mutate(Ne = cfu_to_Ne(cfu),
+         threshold_s_coef = 1 / Ne) |>
+  ungroup() |>
+  summarise(mean_MA_Ne = mean(Ne),
+            sem_MA_Ne = sd(Ne) / sqrt(n()),
+            mean_MA_threshold_s_coef = mean(threshold_s_coef),
+            sem_MA_threshold_s_coef = sd(threshold_s_coef) / sqrt(n()),
+            .by = species) 
+
+# number of MA generations
+number_of_transfers <- 50
+generation_data <-
+  cfu_data |>
+  rowwise() |>
+  mutate(generations = (log(cfu) / log(2)) * number_of_transfers) |> # number of generations per transfer * number of transfers
+  ungroup() |>
+  summarise(mean_gens = mean(generations),
+            sem_gens = sd(generations) / sqrt(n()),
+            .by = species)
+a_generations <- generation_data |> filter(species == 'acidophilus') |> pull(mean_gens)
+c_generations <- generation_data |> filter(species == 'crispatus') |> pull(mean_gens)
+l_generations <- generation_data |> filter(species == 'lactis') |> pull(mean_gens)
+
+# length of genome
+a_genome_length <- a_fna |> nchar()
+c_genome_length <- c_fna |> nchar()
+l_genome_length <- l_fna |> nchar()
+l_withPlasmids_genome_length <- l_withPlasmids_fna |> nchar() |> sum()
+
+# GC content of full genome including plasmids
+a_gc <- a_fna |> as.character() |> str_count('G|C') / a_genome_length
+c_gc <- c_fna |> as.character() |> str_count('G|C') / c_genome_length
+l_gc <- l_fna |> as.character() |> str_count('G|C') / l_genome_length
+l_withPlasmids_gc <- l_withPlasmids_fna |> as.character() |> str_count('G|C') |> sum() / l_withPlasmids_genome_length
+
+# number of coding bases in genome excluding plasmids
+a_coding_bases <- reduce(a_gff[which(mcols(a_gff)$type == 'CDS')], ignore.strand = TRUE)@ranges@width |> sum()
+c_coding_bases <- reduce(c_gff[which(mcols(c_gff)$type == 'CDS')], ignore.strand = TRUE)@ranges@width |> sum()
+l_coding_bases <- reduce(l_gff[which(mcols(l_gff)$type == 'CDS')], ignore.strand = TRUE)@ranges@width |> sum()
+l_withPlasmids_coding_bases <- reduce(l_withPlasmids_gff[which(mcols(l_withPlasmids_gff)$type == 'CDS')], ignore.strand = TRUE)@ranges@width |> sum()
+
+# oriC loci
+a_oriC_granges <-
+  GRanges(seqnames = names(a_fna), seqinfo = seqinfo(a_fna),
+          ranges = IRanges(start = c(1978375, 1, 1369),
+                           end = c(a_genome_length, 42, 1545),
+                           names = c('oriC_1', 'oriC_1', 'oriC_2')))
+mcols(a_oriC_granges)$oriC <- c(1, 1, 2)
+
+c_oriC_granges <-
+  GRanges(seqnames = names(c_fna), seqinfo = seqinfo(c_fna),
+          ranges = IRanges(start = c(2238615, 1, 1369),
+                           end = c(c_genome_length, 42, 1538),
+                           names = c('oriC_1', 'oriC_1', 'oriC_2')))
+mcols(c_oriC_granges)$oriC <- c(1, 1, 2)
+
+l_oriC_granges <-
+  GRanges(seqnames = names(l_fna), seqinfo = seqinfo(l_fna),
+          ranges = IRanges(start = c(1920748, 1919224),
+                           end = c(1926827, 1919379),
+                           names = c('oriC_1', 'oriC_2')))
+mcols(l_oriC_granges)$oriC <- c(1, 2)
+
+species_letters <- c('a', 'c', 'l')
+```
+
+Negative binomial GOF
+
+```{r}
+gof_names <- c('species', 'mut_type', 'dist', 'chisq_p')
+
+gof <- lapply(c('pois', 'nbinom'), FUN = function(d){
+  mut_fits = lapply(c('SNM', 'INS', 'DEL'), FUN = function(m){
+      species_fits = lapply(species_letters, FUN = function(s){
+          # get species vcf granges
+          s_granges = acl_vcf_granges[[s]]
+          # remove complex mutations and get mutations for the specific type
+          vcf_granges_filtered = s_granges[!mcols(s_granges)$complex_mutation & mcols(s_granges)$mut_type == m]
+          # split grange by line to get count by line
+          vcf_granges_filtered_list = split(vcf_granges_filtered, mcols(vcf_granges_filtered)$line)
+          # get mutation count by line
+          mut_count = lapply(vcf_granges_filtered_list, length) |> as.numeric()
+          # include 0s
+          if (oget(s, '_num_lines') > length(mut_count)){mut_count = c(mut_count, rep(0, oget(s, '_num_lines') - length(mut_count)))}
+          # fit distribution
+          fit_obj = fitdistrplus::fitdist(mut_count, d)
+          # calculate goodness of fit
+          gof_obj = fitdistrplus::gofstat(f = fit_obj, chisqbreaks = mut_count |> unique() |> sort())
+          # add results to data frame    
+          results = setNames(c(s, m, d, gof_obj$chisqpvalue), gof_names)
+          # get snm distributions for QQ plots
+          if (m == 'SNM' & d == 'nbinom'){
+            var_name = paste0(s, '_snm_nbinom_fit')
+            print(var_name)
+            assign(var_name, fit_obj, envir = .GlobalEnv)}
+          return(results)
+        }) |> bind_rows()
+        return(species_fits)
+    }) |> bind_rows()
+    return(mut_fits)
+  }) |> bind_rows() |>
+  mutate(sig_bad_fit = case_when(chisq_p <= 0.05 ~ "*", TRUE ~ ''))
+
+fig_S1 <-
+  cowplot::plot_grid(
+  as.ggplot(function() plot(a_snm_nbinom_fit)) +
+  annotate(geom = 'text', x = 0.05, y = 0.5, angle = 90, size = 10, label = "Lb. acidophilus", fontface = "italic"),
+  as.ggplot(function() plot(c_snm_nbinom_fit)) +
+  annotate(geom = 'text', x = 0.05, y = 0.5, angle = 90, size = 10, label = "Lb. crispatus", fontface = "italic"),
+  as.ggplot(function() plot(l_snm_nbinom_fit)) +
+  annotate(geom = 'text', x = 0.05, y = 0.5, angle = 90, size = 10, label = "Lc. lactis", fontface = "italic"),
+  ncol = 1) +
+  annotate(geom = 'text', label = 'A', x = 0.05, y = 0.975, size = 10, fontface = 'bold') +
+  annotate(geom = 'text', label = 'B', x = 0.55, y = 0.975, size = 10, fontface = 'bold') +
+  annotate(geom = 'text', label = 'C', x = 0.05, y = 0.65, size = 10, fontface = 'bold') +
+  annotate(geom = 'text', label = 'D', x = 0.55, y = 0.65, size = 10, fontface = 'bold') +
+  annotate(geom = 'text', label = 'E', x = 0.05, y = 0.3, size = 10, fontface = 'bold') +
+  annotate(geom = 'text', label = 'F', x = 0.55, y = 0.3, size = 10, fontface = 'bold') 
+
+ggsave(filename = 'fig_S1.pdf',
+       plot = fig_S1,
+       device = 'pdf',
+       width = 15,
+       height = 15,
+       units = 'in')
+```
+
+### CDS SNM enrichment
+
+```{r cds_snm_enrichment}
+
+cds_snm_enrichment <-
+  sapply(species_letters, USE.NAMES = TRUE, FUN = function(s){
+    s_granges = acl_vcf_granges[[s]]
+    gff_granges = oget(species_letter = s, '_gff')
+    snm_granges = s_granges[!mcols(s_granges)$complex_mutation & mcols(s_granges)$mut_type == 'SNM']
+    cds_granges = reduce(gff_granges[which(mcols(gff_granges)$type == 'CDS')], ignore.strand = TRUE)
+    fna_granges = oget(species_letter = s, '_fna_range')
+    
+    # build contingency table
+    snm_in_cds_site_count <-
+      intersect(cds_granges, snm_granges) |>
+      width() |> sum() |> as.numeric()
+      
+    cds_no_snm_site_count <-
+      setdiff(cds_granges, snm_granges) |>
+      width() |> sum() |> as.numeric()
+      
+    snm_in_intergenic_site_count <-
+      setdiff(snm_granges, cds_granges) |>
+      width() |> sum() |> as.numeric()
+    
+    intergenic_no_snm_site_count <-
+      setdiff(fna_granges, snm_granges) |> setdiff(y = cds_granges) |> width() |> sum() |> as.numeric()
+    
+    snm_cds_contingency <-
+      matrix(ncol = 2, nrow = 2,
+             dimnames = list(c('in_cds', 'out_cds'), c('is_snm', 'not_snm')),
+             c(snm_in_cds_site_count, snm_in_intergenic_site_count,
+               cds_no_snm_site_count, intergenic_no_snm_site_count))
+      
+      # run test
+      result = chisq.test(snm_cds_contingency)
+      
+      #return result
+      return(result$p.value)
+  }) |> t() |> as.data.frame(row.names = 'chisq.p.value')
+
+cds_snm_enrichment
+```
+
+# Make mutation tables
+
+```{r}
+# small mutation table
+small_mutation_table <-
+  rbind(  
+    a_vcf_granges |>
+      as.data.frame() |> 
+      dplyr::select(species, line, POS, REF, ALT, mut_type, SNM_type, complex_mutation),
+    c_vcf_granges |>
+      as.data.frame() |> 
+      dplyr::select(species, line, POS, REF, ALT, mut_type, SNM_type, complex_mutation),
+    l_vcf_granges |>
+      as.data.frame() |> 
+      dplyr::select(species, line, POS, REF, ALT, mut_type, SNM_type, complex_mutation)) |>
+    mutate(species = case_when(species == 'a' ~ 'L. acidophilus',
+                               species == 'c' ~ 'L. crispatus',
+                               species == 'l' ~ 'L. lactis')) |>
+  arrange(species, line, POS)
+
+# sv table
+sv_table <-
+  sv |>
+    as.data.frame() |> 
+    dplyr::select(species, line, sv_type, transposition_element, transposition_destination, del_inv_dup_start, del_inv_dup_end) |>
+    dplyr::rename(transposition_ins_site = transposition_destination) |>
+    mutate(species = paste0('L. ', species), POS = case_when(!is.na(transposition_ins_site) ~ transposition_ins_site,
+                                                             !is.na(del_inv_dup_start) ~ del_inv_dup_start,
+                                                             TRUE ~ NA)) |>
+  arrange(species, line, POS) |>
+  dplyr::select(-POS)
+
+
+#write.csv(small_mutation_table, file = here('clean', 'small_mutation_table.csv'))
+```
+
+# Figure 1
+
+```{r make_presence_absence_table}
+# import genes of interest
+heatmap_genes <- read.csv(here('clean', 'cog_analysis', 'heatmap_genes.csv')) |> mutate(gene_COG = paste0(gene_symbol, " ", COG_number))
+# import eggNOG annotations and fix names
+eggNOG_gff_files <- list.files(here('clean', 'cog_analysis', 'eggNog'))
+eggNOG_gffs <- sapply(here('clean', 'cog_analysis', 'eggNog', eggNOG_gff_files), import.gff, USE.NAMES = TRUE)
+names(eggNOG_gffs) <- gsub("\\..*","", gsub(".*[\\/](.*)\\..*", "\\1", names(eggNOG_gffs)))
+
+# function takes in a granges gff and looks for a string match to a specific COG in the em_OGs column
+COG_presence <- function(gff_in, COG){
+  out <-
+    gff_in |> 
+    elementMetadata() |>
+    as.data.frame() |>
+    dplyr::select(em_OGs) |>
+    unnest(cols = em_OGs) |>
+    as.vector() |>
+    grepl(pattern = COG, x = _) |>
+    sum()
+  return(out)
+}
+
+# make presence/absence table
+pa <- apply(heatmap_genes, MARGIN = 1, FUN = function(gene) sapply(eggNOG_gffs, FUN = function(strain) COG_presence(strain, gene[which(names(gene) == "COG_number")])))
+colnames(pa) <- heatmap_genes$gene_COG
+pa <- as.data.frame(pa)
+#pa$strain <- sub("^(([^_]*_){1}[^_]*)_.*", "\\1", rownames(pa))
+pa <- rbind(pa, colMeans(pa[which(grepl("S_suis_MA", rownames(pa))),]))
+pa <- pa[which(!grepl("S_suis_MA", rownames(pa))),]
+rownames(pa)[length(rownames(pa))] <- 'S_suis'
+rownames(pa) <- gsub("_", ". ", rownames(pa))
+```
+
+# Figure 2
+
+## Figure 2a
+
+```{r fig_2a_data}
+fig_2a_data <-
+  small_mutation_table |>
+  rowwise() |>
+  mutate(species = substring(species, 4, 4) |> tolower()) |>
+  ungroup() |> 
+  filter(mut_type == 'SNM',
+         !complex_mutation) |>
+    dplyr::select(species, line, SNM_type) |> 
+  # add count for observed mutations
+  mutate(mut_snm = 1) |> 
+  # add empty mutation rows to catch 0s
+    rbind(expand.grid(line = all_lines,
+                SNM_type = c("G:C > A:T", "A:T > G:C", "A:T > T:A", "A:T > C:G", "G:C > T:A", "G:C > C:G")) |>
+    mutate(species = case_when(grepl('9105', line) ~ 'a',
+                               grepl('8855', line) ~ 'c',
+                               grepl('9106', line) ~ 'l',
+                               TRUE ~ NA),
+           mut_snm = 0)) |> 
+  # numerically annotate each mutation type
+  mutate(
+         mut_GC_AT = case_when(SNM_type == "G:C > A:T" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_GC_TA = case_when(SNM_type == "G:C > T:A" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_GC_CG = case_when(SNM_type == "G:C > C:G" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_GC = case_when(SNM_type == "A:T > G:C" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_TA = case_when(SNM_type == "A:T > T:A" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_CG = case_when(SNM_type == "A:T > C:G" ~ mut_snm,
+                               TRUE ~ 0)) |>
+  # get total counts for each mutation type
+  summarise(total_snm_count = sum(mut_snm),
+            total_ts_count = sum(mut_GC_AT, mut_AT_GC),
+            total_tv_count = sum(mut_GC_TA, mut_GC_CG, mut_AT_TA, mut_AT_CG),
+            total_GC_AT_count = sum(mut_GC_AT),
+            total_GC_TA_count = sum(mut_GC_TA),
+            total_GC_CG_count = sum(mut_GC_CG),
+            total_AT_GC_count = sum(mut_AT_GC),
+            total_AT_TA_count = sum(mut_AT_TA),
+            total_AT_CG_count = sum(mut_AT_CG),
+            .by = c(species, line)) |> 
+    # calculate per generation per site rates
+  rowwise() |>
+  mutate(
+    snm_per_site_per_gen = total_snm_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    ts_per_site_per_gen = total_ts_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    tv_per_site_per_gen = total_tv_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    GC_AT_per_site_per_gen = total_GC_AT_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    GC_TA_per_site_per_gen = total_GC_TA_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    GC_CG_per_site_per_gen = total_GC_CG_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    AT_GC_per_site_per_gen = total_AT_GC_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations'),
+    AT_TA_per_site_per_gen = total_AT_TA_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations'),
+    AT_CG_per_site_per_gen = total_AT_CG_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations')) |>
+  # calculate species mean & sem
+  dplyr::select(species, line, ends_with('per_site_per_gen')) |>
+  pivot_longer(ends_with('per_site_per_gen'), names_to = 'mut_type', values_to = 'per_site_per_gen') |>
+  summarise(mean = mean(per_site_per_gen),
+            sem = sd(per_site_per_gen) / n(),
+            .by = c(species, mut_type)) |>
+  # make nice species labels
+   mutate(Species = case_when(species == 'a' ~ '*L. acidophilus*',
+                             species == 'c' ~ '*L. crispatus*',
+                             species == 'l' ~ '*L. lactis*'),
+          type = case_when(
+            mut_type == 'snm_per_site_per_gen' ~ 'SNM',
+            mut_type == 'ts_per_site_per_gen' ~ 'Ts',
+            mut_type == 'tv_per_site_per_gen' ~ 'Tv',
+            mut_type == 'GC_AT_per_site_per_gen' ~ 'G:C > A:T',
+            mut_type == 'GC_TA_per_site_per_gen' ~ 'G:C > T:A',
+            mut_type == 'GC_CG_per_site_per_gen' ~ 'G:C > C:G',
+            mut_type == 'AT_GC_per_site_per_gen' ~ 'A:T > G:C',
+            mut_type == 'AT_TA_per_site_per_gen' ~ 'A:T > T:A',
+            mut_type == 'AT_CG_per_site_per_gen' ~ 'A:T > C:G'
+          ))
+```
+
+## Figure 2a
+
+```{r}
+ct <- c('#BF4F26', '#024873', '#D9AA1E', '#f7e6a1', "#835c99", "#d0a2d7",  '#D98825', '#8c7259')
+```
+
+# Fig 3
+
+```{r acidophilus_snm_patterns_data}
+
+get_range_gc <-
+  function(fna, range_start, range_end){ # ranges are INCLUSIVE
+  ranges_content = fna[[1]][range_start:range_end] |> alphabetFrequency()
+  gc = sum(ranges_content['G'], ranges_content['C']) /
+       sum(ranges_content['A'], ranges_content['T'], ranges_content['G'],ranges_content['C'])
+  return(gc)
+  }
+
+get_range_gcSkew <-
+  function(fna, range_start, range_end) {
+    ranges_content = fna[[1]][range_start:range_end] |> alphabetFrequency()
+    skew = (ranges_content['G'] - ranges_content['C']) /
+       sum(ranges_content['G'],ranges_content['C'])
+    return(skew)
+  }
+
+
+get_range_base_count <-
+  function(fna, range_start, range_end, base) {
+    ranges_content = fna[[1]][range_start:range_end] |> alphabetFrequency()
+    result = ranges_content[base]
+    return(result)
+  }
+
+
+
+####
+species_letter <- 'a'
+window_width <- 10000
+window_step <- 10000
+
+####
+
+sliding_window_snm_rates <- function(species_letter, window_width, window_step){
+  fna_granges = oget(species_letter, '_fna_range')
+  fna = oget(species_letter, '_fna')
+  num_lines = oget(species_letter = species_letter, object_string = '_num_lines')
+  num_gens = oget(species_letter = species_letter, object_string = '_generations')
+  
+  vcf_granges = oget(species_letter, '_vcf_granges')
+  oriC_granges = oget(species_letter, '_oriC_granges')
+  #################################################
+  start_granges <- GRanges(seqnames = names(fna), seqinfo = seqinfo(fna),
+                          ranges = IRanges(start = c(1),
+                                           end = c(1),
+                                           names = c('chrom_start'))) 
+  
+  end_granges <- GRanges(seqnames = names(fna), seqinfo = seqinfo(fna),
+                        ranges = IRanges(start = c(oget(species_letter, '_genome_length')),
+                                         end = c(oget(species_letter, '_genome_length')),
+                                         names = c('chrom_end')))
+  mcols(start_granges)$dist_to_oriC_1 =
+    distanceToNearest(start_granges, oriC_granges[mcols(oriC_granges)$oriC == 1])@elementMetadata$distance
+  mcols(end_granges)$dist_to_oriC_1 =
+    distanceToNearest(end_granges, oriC_granges[mcols(oriC_granges)$oriC == 1])@elementMetadata$distance
+  ################################################  
+  vcf_granges = vcf_granges[!mcols(vcf_granges)$complex_mutation & mcols(vcf_granges)$mut_type == 'SNM']
+  
+  sliding_windows = 
+    fna_granges |>
+    slidingWindows(width = window_width, step = window_step) |>
+    unlist()
+  
+  mcols(sliding_windows)$dist_to_oriC_1 =
+    distanceToNearest(sliding_windows, oriC_granges[mcols(oriC_granges)$oriC == 1])@elementMetadata$distance
+  #################################################
+  mcols(sliding_windows)$start_to_oriC_1 = mcols(start_granges)$dist_to_oriC_1
+  mcols(sliding_windows)$end_to_oriC_1 = mcols(end_granges)$dist_to_oriC_1
+  mcols(sliding_windows)$dist_to_start =
+    distanceToNearest(sliding_windows, start_granges)@elementMetadata$distance
+  mcols(sliding_windows)$dist_to_end =
+    distanceToNearest(sliding_windows, end_granges)@elementMetadata$distance
+  mcols(sliding_windows)$right_replichore =
+    mcols(sliding_windows)$dist_to_start > mcols(sliding_windows)$dist_to_end
+
+
+  mcols(sliding_windows)$oriC_1_thru_start = mcols(sliding_windows)$dist_to_start +  mcols(end_granges)$dist_to_oriC_1
+  mcols(sliding_windows)$oriC_1_thru_end = mcols(sliding_windows)$dist_to_end +  mcols(start_granges)$dist_to_oriC_1
+  mcols(sliding_windows)$dist = min(mcols(sliding_windows)$oriC_1_thru_start, mcols(sliding_windows)$oriC_1_thru_end, mcols(sliding_windows)$dist_to_oriC_1)
+  dist_df = bind_cols(
+    sliding_windows@ranges@start,
+    mcols(sliding_windows)$dist_to_start,
+    mcols(sliding_windows)$dist_to_end,
+     mcols(sliding_windows)$dist_to_oriC_1,
+     mcols(sliding_windows)$oriC_1_thru_start,
+       mcols(sliding_windows)$oriC_1_thru_end)
+  names(dist_df) = c('start', 'dist_to_start', 'dist_to_end', 'dist_to_oriC_1', 'oriC_1_thru_start', 'oriC_1_thru_end')
+  dist_df = dist_df |> rowwise() |> mutate(dist = min(dist_to_oriC_1, oriC_1_thru_start, oriC_1_thru_end)) |> ungroup()
+  mcols(sliding_windows)$dist_to_oriC_1 = dist_df$dist
+    
+  
+  ################################################
+  mcols(sliding_windows)$range_gc_content <-
+    mapply(function(start, end) get_range_gc(fna, start, end),
+           sliding_windows@ranges@start,
+           sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$range_at_content <- 1 - mcols(sliding_windows)$range_gc_content
+  mcols(sliding_windows)$range_gc_skew <- 
+   mapply(function(start, end) get_range_gcSkew(fna, start, end),
+         sliding_windows@ranges@start,
+         sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$range_g_count <-
+    mapply(function(start, end) get_range_base_count(fna, start, end, "G"),
+           sliding_windows@ranges@start,
+           sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$range_c_count <-
+    mapply(function(start, end) get_range_base_count(fna, start, end, "C"),
+           sliding_windows@ranges@start,
+           sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$range_a_count <-
+    mapply(function(start, end) get_range_base_count(fna, start, end, "A"),
+           sliding_windows@ranges@start,
+           sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$range_t_count <-
+    mapply(function(start, end) get_range_base_count(fna, start, end, "T"),
+           sliding_windows@ranges@start,
+           sliding_windows@ranges@start + sliding_windows@ranges@width - 1)
+  mcols(sliding_windows)$G_to_T_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'G' & mcols(vcf_granges)$ALT == 'T')], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$G_to_A_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'G' & mcols(vcf_granges)$ALT == 'A')], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$G_to_C_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'G' & mcols(vcf_granges)$ALT == 'C')], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$C_to_T_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'C' & mcols(vcf_granges)$ALT == 'T')], ignore.strand = TRUE) 
+  
+  mcols(sliding_windows)$C_to_A_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'C' & mcols(vcf_granges)$ALT == 'A')], ignore.strand = TRUE) 
+  
+  mcols(sliding_windows)$C_to_G_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'C' & mcols(vcf_granges)$ALT == 'G')], ignore.strand = TRUE) 
+
+  mcols(sliding_windows)$A_to_T_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'A' & mcols(vcf_granges)$ALT == 'T')], ignore.strand = TRUE) 
+  
+  mcols(sliding_windows)$A_to_G_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'A' & mcols(vcf_granges)$ALT == 'G')], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$A_to_C_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'A' & mcols(vcf_granges)$ALT == 'C')], ignore.strand = TRUE) 
+
+  mcols(sliding_windows)$T_to_G_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'T' & mcols(vcf_granges)$ALT == 'G')], ignore.strand = TRUE)  
+  
+  mcols(sliding_windows)$T_to_A_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'T' & mcols(vcf_granges)$ALT == 'A')], ignore.strand = TRUE) 
+  
+  mcols(sliding_windows)$T_to_C_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$REF == 'T' & mcols(vcf_granges)$ALT == 'C')], ignore.strand = TRUE) 
+  
+  
+  mcols(sliding_windows)$G_to_C_snm_rate = 
+    mapply(function(count_muts, target_count) count_muts / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$G_to_C_snm_count,
+           mcols(sliding_windows)$range_g_count)
+  mcols(sliding_windows)$G_to_A_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$G_to_A_snm_count,
+           mcols(sliding_windows)$range_g_count)
+  mcols(sliding_windows)$G_to_T_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$G_to_T_snm_count,
+           mcols(sliding_windows)$range_g_count)
+   
+  mcols(sliding_windows)$C_to_G_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$C_to_G_snm_count,
+           mcols(sliding_windows)$range_c_count)
+  mcols(sliding_windows)$C_to_A_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$C_to_A_snm_count,
+           mcols(sliding_windows)$range_c_count)
+  mcols(sliding_windows)$C_to_T_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$C_to_T_snm_count,
+           mcols(sliding_windows)$range_c_count)
+
+  mcols(sliding_windows)$A_to_C_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$A_to_C_snm_count,
+           mcols(sliding_windows)$range_a_count)
+  mcols(sliding_windows)$A_to_G_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$A_to_G_snm_count,
+           mcols(sliding_windows)$range_a_count)
+  mcols(sliding_windows)$A_to_T_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$A_to_T_snm_count,
+           mcols(sliding_windows)$range_a_count)
+
+  mcols(sliding_windows)$T_to_C_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$T_to_C_snm_count,
+           mcols(sliding_windows)$range_t_count)
+  mcols(sliding_windows)$T_to_A_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$T_to_A_snm_count,
+           mcols(sliding_windows)$range_t_count)
+  mcols(sliding_windows)$T_to_G_snm_rate = 
+    mapply(function(mut_count, target_count) mut_count / (target_count * num_lines * num_gens),
+           mcols(sliding_windows)$T_to_G_snm_count,
+           mcols(sliding_windows)$range_t_count)
+  
+  mcols(sliding_windows)$GC_to_AT_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "G:C > A:T")], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$AT_to_GC_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "A:T > G:C")], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$AT_to_TA_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "A:T > T:A")], ignore.strand = TRUE)
+
+  mcols(sliding_windows)$AT_to_CG_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "A:T > C:G")], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$GC_to_TA_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "G:C > T:A" )], ignore.strand = TRUE)
+  
+  mcols(sliding_windows)$GC_to_CG_snm_count =
+    sliding_windows |>
+    countOverlaps(vcf_granges[which(mcols(vcf_granges)$SNM_type == "G:C > C:G")], ignore.strand = TRUE)
+
+    mcols(sliding_windows)$GC_to_AT_snm_rate = 
+    mapply(function(count_muts, range_size, gc_range) count_muts / (range_size * gc_range * num_lines * num_gens),
+           mcols(sliding_windows)$GC_to_AT_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_gc_content)
+  
+  mcols(sliding_windows)$AT_to_GC_snm_rate =
+    mapply(function(count_muts, range_size, at_range) count_muts / (range_size * at_range * num_lines * num_gens),
+           mcols(sliding_windows)$AT_to_GC_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_at_content)
+  
+  mcols(sliding_windows)$AT_to_TA_snm_rate =
+    mapply(function(count_muts, range_size, at_range) count_muts / (range_size * at_range * num_lines * num_gens),
+           mcols(sliding_windows)$AT_to_TA_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_at_content)
+  
+  mcols(sliding_windows)$AT_to_CG_snm_rate =
+    mapply(function(count_muts, range_size, at_range) count_muts / (range_size * at_range * num_lines * num_gens),
+           mcols(sliding_windows)$AT_to_CG_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_at_content)
+  
+  mcols(sliding_windows)$GC_to_TA_snm_rate =
+    mapply(function(count_muts, range_size, gc_range) count_muts / (range_size * gc_range * num_lines * num_gens),
+           mcols(sliding_windows)$GC_to_TA_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_gc_content)
+  
+  mcols(sliding_windows)$GC_to_CG_snm_rate =
+    mapply(function(count_muts, range_size, gc_range) count_muts / (range_size * gc_range * num_lines * num_gens),
+           mcols(sliding_windows)$GC_to_CG_snm_count,
+           sliding_windows@ranges@width,
+           mcols(sliding_windows)$range_gc_content)
+  
+
+    
+  
+  return(sliding_windows)
+}
+```
+
+```{r}
+# 
+# snmpos_sliding_window_width <- 10000
+# snmpos_sliding_window_step <- 10000
+# 
+# slides <-
+#   bind_rows(
+#   sliding_window_snm_rates(species_letter = 'a', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+#   as.data.frame() |> mutate(species = 'a'),
+#   sliding_window_snm_rates(species_letter = 'c', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+#   as.data.frame() |> mutate(species = 'c'),
+#   sliding_window_snm_rates(species_letter = 'l', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+#   as.data.frame() |> mutate(species = 'l'))
+# 
+# 
+# slides |>
+#   filter(species == 'a') |>
+#   ggplot(aes(x = start, y = range_gc_skew)) +
+#   geom_point() +
+#     geom_smooth() +
+#     theme_bw() 
+# 
+# slides |>
+#   pivot_longer(ends_with('snm_rate'),
+#                names_to = 'snm_type',
+#                values_to = 'snm_rate')  |> 
+#   filter(species == 'a',
+#          snm_type %in% c('C_to_T_snm_rate', 'G_to_A_snm_rate', 'GC_to_AT_snm_rate')) |>  View()
+#   ggplot(aes(x = start, y = snm_rate)) +
+#   geom_point() +
+#   geom_smooth() +
+#   geom_hline(yintercept = c(2e-8, 6e-8)) +
+#   theme_bw() +
+#   facet_wrap(~snm_type)
+#   
+
+```
+
+```{r}
+
+# set up metadata for plotting stuff like gc skew
+meta_sliding_windows <-
+  a_fna_range |>
+  slidingWindows(width = 10000, step = 1000L) |>
+  unlist()
+
+mcols(meta_sliding_windows)$range_gc_content <- 
+   mapply(function(start, end) get_range_gc(a_fna, start, end),
+         meta_sliding_windows@ranges@start,
+         meta_sliding_windows@ranges@start + meta_sliding_windows@ranges@width - 1)
+
+mcols(meta_sliding_windows)$range_gc_skew <- 
+   mapply(function(start, end) get_range_gcSkew(a_fna, start, end),
+         meta_sliding_windows@ranges@start,
+         meta_sliding_windows@ranges@start + meta_sliding_windows@ranges@width - 1)
+
+mcols(meta_sliding_windows)$range_midpoint <-
+  mapply(function(start, width) median(start, start + width - 1),
+         meta_sliding_windows@ranges@start,
+         meta_sliding_windows@ranges@width)
+
+meta_sliding_windows_df <-
+  meta_sliding_windows |>
+                as.data.frame() |>
+                mutate(skew_col = case_when(range_gc_skew > 0 ~ '+',
+                                            range_gc_skew < 0 ~ '-'),
+                segment = cumsum(c(0, diff(sign(range_gc_skew)) != 0)))
+```
+
+```{r a_circos}
+# setting a sliding window length and step
+# the acidophilus genome is 1978850 bp long
+# because 19 × 104150 = 1978850, we can split it into 19 evenly sized bins
+circos_sliding_window_width <- 39577 * 2
+circos_sliding_window_step <- 39577 * 2
+
+fig_3a_heatmap <-
+  sliding_window_snm_rates(species_letter = 'a', window_width = circos_sliding_window_width, window_step = circos_sliding_window_step) |>
+  as.data.frame() |>
+  dplyr::select(-strand, -seqnames)
+
+fig_3a_gc <-
+  meta_sliding_windows |>
+  as.data.frame() |> 
+  dplyr::select(range_midpoint, range_gc_content, range_gc_skew) |>
+  mutate(skew_col = case_when(range_gc_skew > 0 ~ '+',
+                                            range_gc_skew < 0 ~ '-'),
+                segment = cumsum(c(0, diff(sign(range_gc_skew)) != 0)))
+
+fig_3a_cds <-
+  a_gff[which(mcols(a_gff)$type == 'CDS')] |>
+  as.data.frame() |>
+  mutate(Strand = case_when(strand == '+' ~ 1.5, strand == '-' ~ 1)) |>
+  mutate(Strand = 6 + Strand) |>
+  dplyr::select(strand, Strand, start)
+
+fig_3a_snmPOS <-
+small_mutation_table |>
+  filter(SNM_type == "G:C > A:T",
+         !complex_mutation) |>
+  dplyr::select(POS, SNM_type) |>
+  mutate(Y = 15)
+
+```
+
+```{r snm_location_correlation}
+
+snmpos_sliding_window_width <- 10000
+snmpos_sliding_window_step <- 10000
+
+cs <-
+bind_rows(
+  sliding_window_snm_rates(species_letter = 'a', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+  as.data.frame() |> mutate(species = 'a'),
+  sliding_window_snm_rates(species_letter = 'c', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+  as.data.frame() |> mutate(species = 'c'),
+  sliding_window_snm_rates(species_letter = 'l', window_width = snmpos_sliding_window_width, window_step = snmpos_sliding_window_step) |>
+  as.data.frame() |> mutate(species = 'l')) |>
+  dplyr::select(-seqnames, -strand) |> 
+  rowwise() |>
+  mutate(window_snm = sum(c_across(GC_to_AT_snm_count:GC_to_CG_snm_count))) |> 
+  ungroup() |>
+  pivot_longer(ends_with('snm_rate'),
+               names_to = 'snm_type',
+               values_to = 'snm_rate') |> 
+  dplyr::select(start, end, width, dist_to_oriC_1, species, snm_type, snm_rate, right_replichore, range_gc_skew) |> 
+   mutate(snm_type = case_when(
+                       snm_type == "GC_to_AT_snm_rate" ~ 'G:C > A:T',
+                       snm_type == "AT_to_GC_snm_rate" ~ 'A:T > G:C',
+                       snm_type == "AT_to_TA_snm_rate" ~ 'A:T > T:A',
+                       snm_type == "AT_to_CG_snm_rate" ~ 'A:T > C:G',
+                       snm_type == "GC_to_TA_snm_rate" ~ 'G:C > T:A',
+                       snm_type == "GC_to_CG_snm_rate" ~ 'G:C > C:G',
+                       TRUE ~ 'stranded')) |>
+  filter(snm_type != 'stranded')
+# calculate spearman correlation metrics
+cs_corr <- 
+  cs |>
+  nest(data = c(-species, -snm_type)) |>
+  mutate(cor=map(data,~cor.test(.x$snm_rate, .x$dist_to_oriC_1, exact = FALSE, method = "sp"))) |>
+  mutate(tidied = map(cor, broom::tidy)) |>
+  unnest(tidied)
+
+# adjust p.values with bonferroni correction
+cs_corr$p.bonf <- p.adjust(p = cs_corr$p.value, method = 'bonferroni', n = 18)
+
+# simplify & tidy
+cs_corr <- cs_corr |> dplyr::select(species, snm_type, estimate, p.bonf) |> dplyr::rename('spearman_rho' = estimate)
+```
+
+```{r write_outputs}
+# write.csv(small_mutation_table,
+#          file = "/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/small_mutation_table.csv",
+#          row.names = FALSE)
+# write.csv(sv_table, file = '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/structural_variants.csv')
+# write.csv(pa, file = '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/fig1_genes.csv')
+# # 
+# # 
+# write.csv(fig_3a_heatmap, file = '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/fig_3a_data.csv')
+# write.csv(fig_3a_gc, file = '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/fig_3a_gc.csv')
+# write.csv(fig_3a_cds, '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/fig_3a_cds.csv')
+# write.csv(fig_3a_snmPOS,'/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/fig_3a_snmPOS.csv')
+# 
+# write.csv(cs, file = '/Users/haleof/Library/CloudStorage/Box-Box/Behringer_Lab_Box_Drive/Manuscripts/GitHub_for_Publications/LAB_MA_paper_2024/data/snmRate_distOriC.csv')
+# 
+
+```
+
