@@ -1,0 +1,1238 @@
+---
+title: "Analysis & Plotting"
+author: "Owen Hale"
+format:
+  html:
+    code-fold: true
+editor: source
+---
+
+# Load packages
+
+```{r}
+#| include: false
+library(here)
+library(rtracklayer)
+library(tidyverse)
+library(ggtree)
+library(ggnewscale)
+library(ggview)
+library(scales)
+library(ggtext)
+library(colorspace)
+library(readxl)
+library(ggbeeswarm)
+library(ggpubr)
+library(dunn.test)
+```
+
+# Set custom ggplot2 theme
+
+```{r custom_ggplot_theme}
+good_theme <-
+  theme_bw() + 
+        theme(
+          text = element_text(size = 18, family = '', face = 'bold', color = 'black'),
+              panel.background = element_rect(color = 'white'),
+              panel.border = element_rect(color = 'black', fill=NA, linewidth=2),
+              axis.text = element_text(color = 'black', face = 'plain'),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              axis.line = element_line(colour = 'black',
+              linewidth = rel(1)), legend.key = element_blank(), 
+              strip.background = element_rect(fill = 'white', colour = 'black', 
+              linewidth = rel(2)), complete = TRUE)
+
+theme_set(good_theme)
+
+ct <- c('#BF4F26', '#024873', '#D9AA1E', '#f7e6a1', "#835c99", "#d0a2d7",  '#D98825', '#8c7259')
+sh <- c(17, 16, 15)
+lt <- c('solid', 'dotted', 'dashed')
+```
+
+# Figure 1
+
+```{r fig1}
+# Load and clean data
+rpoB_tree <- ape::read.tree(file = here('data', 'rpoB.tree'))
+pa <- read.csv(here('data', 'fig1_genes.csv')) |> column_to_rownames(var = 'X') # set path
+colnames(pa) <- gsub("\\.", " ", colnames(pa))
+rpoB_tree$tip.label <- gsub("\\.", ". ", rpoB_tree$tip.label)
+resp_pa <- pa |> dplyr::select(contains(c('COG1271', 'COG1294', 'COG4987', 'COG4988', 'COG1169', 'COG1165', 'COG0596', 'COG0447', 'COG0318', 'COG1441', 'COG1575', 'COG2226', 'COG1252')))
+oxstress_pa <-pa |> dplyr::select(!contains(c('COG1271', 'COG1294', 'COG4987', 'COG4988', 'COG1169', 'COG1165', 'COG0596', 'COG0447', 'COG0318', 'COG1441', 'COG1575', 'COG2226', 'COG1252'))) #|> dplyr::select(-X)
+
+
+# set palette
+ct_tree <- c("#8c7259", "#BF4F26", "#024873", "#D9AA1E", "#835c99", "#d0a2d7", "#D98825" )
+
+p <-
+  ggtree(rpoB_tree,ladderize = FALSE) +
+    geom_treescale(x=.05, y=6) +
+    geom_hilight(node = 10, color  = 'darkgray', extendto = 2.15, fill = 'lightgray', to.bottom = TRUE)  +
+    geom_tiplab(fontface = 'bold.italic', offset = 0.1, size = 5, align=TRUE, linesize = 0)  +
+    geom_tippoint(aes(fill = label, shape = label), color = 'black', size = 5, position = position_nudge(x = 0.05, y = 0)) +
+    scale_fill_manual(values = ct_tree, guide = 'none') +
+    scale_shape_manual(values = c(25, 21, 22, 24, 25, 25, 25), guide = 'none') 
+
+p1 <- p + new_scale_fill()
+
+l <- 'gray20'
+h <- "skyblue"
+p2 <- gheatmap(p1,
+         resp_pa,
+         offset=1.1,
+         width=1,
+         font.size=3, 
+         colnames_angle=-90,
+         hjust=0,
+         colnames_offset_y = 1.4,
+         low = l,
+         high = h,
+         color = "white",
+         legend_title = '% of MA ancestors\nwith gene') 
+
+fig_1 <- gheatmap(p2,
+         oxstress_pa,
+         offset=2.3,
+         width=1 * (10/13),
+         font.size=3, 
+         colnames_angle=-90,
+         hjust=0,
+         colnames_offset_y = 1.4,
+         low = l,
+         high = h,
+         color = "white",
+         legend_title = '% of MA ancestors\nwith gene') +
+
+  theme(legend.position = c(0.53,0.775),
+        text = element_text(face = 'bold')) +
+  lims(x = c(-1, 10),
+       y = c(-1, 8))
+
+fig_1 + canvas(20,7)
+```
+
+## Figure 2
+
+# Import data
+
+```{r}
+small_mutation_table <- read.csv(here('data', 'small_mutation_table.csv'))
+
+a_line_names <- c("9105-MB-01_S1_L005", "9105-MB-03_S1_L005", "9105-MB-05_S1_L005", "9105-MB-06_S1_L005", "9105-MB-09_S1_L005", "9105-MB-10_S1_L005", "9105-MB-13_S1_L005", "9105-MB-14_S1_L005", "9105-MB-16_S1_L005", "9105-MB-17_S1_L005", "9105-MB-18_S1_L005", "9105-MB-21_S1_L005", "9105-MB-22_S1_L005", "9105-MB-23_S1_L005", "9105-MB-24_S1_L005", "9105-MB-25_S1_L005", "9105-MB-26_S1_L005", "9105-MB-27_S1_L005", "9105-MB-28_S1_L005", "9105-MB-29_S1_L005", "9105-MB-30_S1_L005", "9105-MB-33_S1_L005", "9105-MB-34_S1_L005", "9105-MB-35_S1_L005", "9105-MB-37_S1_L005", "9105-MB-38_S1_L005", "9105-MB-39_S1_L005", "9105-MB-40_S1_L005", "9105-MB-41_S1_L005", "9105-MB-44_S1_L005", "9105-MB-47_S1_L005", "9105-MB-48_S1_L005", "9105-MB-49_S1_L005", "9105-MB-51_S1_L005", "9105-MB-52_S1_L005", "9105-MB-54_S1_L005", "9105-MB-55_S1_L005", "9105-MB-56_S1_L005", "9105-MB-57_S1_L005", "9105-MB-58_S1_L005", "9105-MB-59_S1_L005", "9105-MB-60_S1_L005", "9105-MB-61_S1_L005", "9105-MB-63_S1_L005", "9105-MB-66_S1_L005", "9105-MB-67_S1_L005", "9105-MB-69_S1_L005", "9105-MB-73_S1_L005", "9105-MB-76_S1_L005", "9105-MB-77_S1_L005", "9105-MB-78_S1_L005", "9105-MB-79_S1_L005", "9105-MB-80_S1_L005", "9105-MB-81_S1_L005", "9105-MB-82_S1_L005", "9105-MB-83_S1_L005", "9105-MB-85_S1_L005", "9105-MB-86_S1_L005", "9105-MB-87_S1_L005", "9105-MB-88_S1_L005", "9105-MB-89_S1_L005", "9105-MB-90_S1_L005", "9105-MB-91_S1_L005", "9105-MB-92_S1_L005", "9105-MB-93_S1_L005", "9105-MB-94_S1_L005")
+c_line_names <- c("8855-MB-003_S1_L005", "8855-MB-007_S1_L005", "8855-MB-008_S1_L005", "8855-MB-012_S1_L005", "8855-MB-013_S1_L005", "8855-MB-014_S1_L005", "8855-MB-015_S1_L005", "8855-MB-018_S1_L005", "8855-MB-019_S1_L005", "8855-MB-021_S1_L005", "8855-MB-029_S1_L005", "8855-MB-030_S1_L005", "8855-MB-032_S1_L005", "8855-MB-034_S1_L005", "8855-MB-036_S1_L005", "8855-MB-038_S1_L005", "8855-MB-042_S1_L005", "8855-MB-043_S1_L005", "8855-MB-045_S1_L005", "8855-MB-047_S1_L005", "8855-MB-049_S1_L005", "8855-MB-051_S1_L005", "8855-MB-052_S1_L005", "8855-MB-054_S1_L005", "8855-MB-055_S1_L005", "8855-MB-056_S1_L005", "8855-MB-058_S1_L005", "8855-MB-059_S1_L005", "8855-MB-061_S1_L005", "8855-MB-062_S1_L005", "8855-MB-065_S1_L005", "8855-MB-066_S1_L005", "8855-MB-068_S1_L005", "8855-MB-071_S1_L005", "8855-MB-073_S1_L005", "8855-MB-080_S1_L005", "8855-MB-081_S1_L005", "8855-MB-083_S1_L005", "8855-MB-087_S1_L005", "8855-MB-089_S1_L005", "8855-MB-090_S1_L005", "8855-MB-091_S1_L005", "8855-MB-097_S1_L005", "8855-MB-098_S1_L005", "8855-MB-099_S1_L005", "8855-MB-100_S1_L005", "8855-MB-103_S1_L005", "8855-MB-105_S1_L005", "8855-MB-106_S1_L005", "8855-MB-107_S1_L005", "8855-MB-109_S1_L005", "8855-MB-111_S1_L005", "8855-MB-115_S1_L005", "8855-MB-123_S1_L005", "8855-MB-125_S1_L005", "8855-MB-129_S1_L005", "8855-MB-132_S1_L005", "8855-MB-137_S1_L005", "8855-MB-138_S1_L005", "8855-MB-139_S1_L005", "8855-MB-140_S1_L005", "8855-MB-141_S1_L005", "8855-MB-142_S1_L005", "8855-MB-143_S1_L005")
+l_line_names <- c("9106-MB-0001_S1_L005", "9106-MB-0002_S1_L005", "9106-MB-0003_S1_L005", "9106-MB-0004_S1_L005", "9106-MB-0005_S1_L005", "9106-MB-0006_S1_L005", "9106-MB-0007_S1_L005", "9106-MB-0008_S1_L005", "9106-MB-0009_S1_L005", "9106-MB-0011_S1_L005", "9106-MB-0012_S1_L005", "9106-MB-0013_S1_L005", "9106-MB-0015_S1_L005", "9106-MB-0016_S1_L005", "9106-MB-0017_S1_L005", "9106-MB-0019_S1_L005", "9106-MB-0021_S1_L005", "9106-MB-0022_S1_L005", "9106-MB-0023_S1_L005", "9106-MB-0024_S1_L005", "9106-MB-0027_S1_L005", "9106-MB-0029_S1_L005", "9106-MB-0031_S1_L005", "9106-MB-0032_S1_L005", "9106-MB-0035_S1_L005", "9106-MB-0036_S1_L005", "9106-MB-0037_S1_L005", "9106-MB-0038_S1_L005", "9106-MB-0039_S1_L005", "9106-MB-0050_S1_L005", "9106-MB-0053_S1_L005", "9106-MB-0056_S1_L005", "9106-MB-0057_S1_L005", "9106-MB-0058_S1_L005", "9106-MB-0059_S1_L005", "9106-MB-0060_S1_L005", "9106-MB-0061_S1_L005", "9106-MB-0062_S1_L005", "9106-MB-0064_S1_L005", "9106-MB-0067_S1_L005", "9106-MB-0068_S1_L005", "9106-MB-0069_S1_L005", "9106-MB-0070_S1_L005", "9106-MB-0074_S1_L005", "9106-MB-0075_S1_L005", "9106-MB-0076_S1_L005", "9106-MB-0077_S1_L005", "9106-MB-0079_S1_L005", "9106-MB-0081_S1_L005", "9106-MB-0082_S1_L005")
+all_lines <- c(a_line_names, c_line_names, l_line_names)
+
+# genome lengths
+a_genome_length <- 1978850
+c_genome_length <- 2239089
+l_genome_length <- 2399762
+l_withPlasmids_genome_length <- 2595814
+
+# gc contents
+a_gc <- 0.3471825
+c_gc <- 0.3700152
+l_gc <- 0.3524012
+l_withPlasmids_gc <- 0.350858
+
+# number of MA generations
+cfu_data <- readxl::read_excel(here('data', 'generation_cfu_data.xlsx'))
+
+# function to calculate the Ne of a MA population based on colony CFUs
+cfu_to_Ne <-
+  function(cfu){
+    # calculate number of generations
+    num_gens = log(cfu) / log(2)
+    # here we are overestimating the number of generations to get an estimate of Ne. The real Ne is lower than the value calculated here
+    round_up_num_gens = ceiling(num_gens) 
+    # make list of generations
+    gen_list = seq(0, round_up_num_gens)
+    # make list of census size at each generation
+    gen_census_pop = 2^gen_list
+
+    # Ne is the harmonic mean of the census population size between transfers
+    Ne = round_up_num_gens / (sum(gen_census_pop^-1))
+    return(Ne)
+  }
+ma_Ne <-
+  cfu_data |>
+  rowwise() |>
+  mutate(Ne = cfu_to_Ne(cfu),
+         threshold_s_coef = 1 / Ne) |>
+  ungroup() |>
+  summarise(mean_MA_Ne = mean(Ne),
+            sem_MA_Ne = sd(Ne) / sqrt(n()),
+            mean_MA_threshold_s_coef = mean(threshold_s_coef),
+            sem_MA_threshold_s_coef = sd(threshold_s_coef) / sqrt(n()),
+            .by = species) 
+
+number_of_transfers <- 50
+generation_data <-
+  cfu_data |>
+  rowwise() |>
+  mutate(generations = (log(cfu) / log(2)) * number_of_transfers) |> # number of generations per transfer * number of transfers
+  ungroup() |>
+  summarise(mean_gens = mean(generations),
+            sem_gens = sd(generations) / sqrt(n()),
+            .by = species)
+a_generations <- generation_data |> filter(species == 'acidophilus') |> pull(mean_gens)
+c_generations <- generation_data |> filter(species == 'crispatus') |> pull(mean_gens)
+l_generations <- generation_data |> filter(species == 'lactis') |> pull(mean_gens)
+
+```
+
+```{r fig2a}
+oget <- function(species_letter, object_string) {
+  get(paste0(species_letter, object_string))
+}
+
+fig_2a_data <-
+  small_mutation_table |>
+  rowwise() |>
+  mutate(species = substring(species, 4, 4) |> tolower()) |>
+  ungroup() |> 
+  filter(mut_type == 'SNM',
+         !complex_mutation) |>
+    dplyr::select(species, line, SNM_type) |> 
+  # add count for observed mutations
+  mutate(mut_snm = 1) |> 
+  # add empty mutation rows to catch 0s
+    rbind(expand.grid(line = all_lines,
+                SNM_type = c("G:C > A:T", "A:T > G:C", "A:T > T:A", "A:T > C:G", "G:C > T:A", "G:C > C:G")) |>
+    mutate(species = case_when(grepl('9105', line) ~ 'a',
+                               grepl('8855', line) ~ 'c',
+                               grepl('9106', line) ~ 'l',
+                               TRUE ~ NA),
+           mut_snm = 0)) |> 
+  # numerically annotate each mutation type
+  mutate(
+         mut_GC_AT = case_when(SNM_type == "G:C > A:T" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_GC_TA = case_when(SNM_type == "G:C > T:A" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_GC_CG = case_when(SNM_type == "G:C > C:G" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_GC = case_when(SNM_type == "A:T > G:C" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_TA = case_when(SNM_type == "A:T > T:A" ~ mut_snm,
+                               TRUE ~ 0),
+         mut_AT_CG = case_when(SNM_type == "A:T > C:G" ~ mut_snm,
+                               TRUE ~ 0)) |>
+  # get total counts for each mutation type
+  summarise(total_snm_count = sum(mut_snm),
+            total_ts_count = sum(mut_GC_AT, mut_AT_GC),
+            total_tv_count = sum(mut_GC_TA, mut_GC_CG, mut_AT_TA, mut_AT_CG),
+            total_GC_AT_count = sum(mut_GC_AT),
+            total_GC_TA_count = sum(mut_GC_TA),
+            total_GC_CG_count = sum(mut_GC_CG),
+            total_AT_GC_count = sum(mut_AT_GC),
+            total_AT_TA_count = sum(mut_AT_TA),
+            total_AT_CG_count = sum(mut_AT_CG),
+            .by = c(species, line)) |> 
+    # calculate per generation per site rates
+  rowwise() |>
+  mutate(
+    snm_per_site_per_gen = total_snm_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    ts_per_site_per_gen = total_ts_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    tv_per_site_per_gen = total_tv_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    GC_AT_per_site_per_gen = total_GC_AT_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    GC_TA_per_site_per_gen = total_GC_TA_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    GC_CG_per_site_per_gen = total_GC_CG_count / (oget(species, '_genome_length') * oget(species, '_gc')) / oget(species, '_generations'),
+    AT_GC_per_site_per_gen = total_AT_GC_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations'),
+    AT_TA_per_site_per_gen = total_AT_TA_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations'),
+    AT_CG_per_site_per_gen = total_AT_CG_count / (oget(species, '_genome_length') * (1 - oget(species, '_gc'))) / oget(species, '_generations')) |>
+  # calculate species mean & sem
+  dplyr::select(species, line, ends_with('per_site_per_gen')) |>
+  pivot_longer(ends_with('per_site_per_gen'), names_to = 'mut_type', values_to = 'per_site_per_gen') |>
+  summarise(mean = mean(per_site_per_gen),
+            sem = sd(per_site_per_gen) / n(),
+            .by = c(species, mut_type)) |>
+  # make nice species labels
+   mutate(Species = case_when(species == 'a' ~ '*L. acidophilus*',
+                             species == 'c' ~ '*L. crispatus*',
+                             species == 'l' ~ '*L. lactis*'),
+          type = case_when(
+            mut_type == 'snm_per_site_per_gen' ~ 'SNM',
+            mut_type == 'ts_per_site_per_gen' ~ 'Ts',
+            mut_type == 'tv_per_site_per_gen' ~ 'Tv',
+            mut_type == 'GC_AT_per_site_per_gen' ~ 'G:C > A:T',
+            mut_type == 'GC_TA_per_site_per_gen' ~ 'G:C > T:A',
+            mut_type == 'GC_CG_per_site_per_gen' ~ 'G:C > C:G',
+            mut_type == 'AT_GC_per_site_per_gen' ~ 'A:T > G:C',
+            mut_type == 'AT_TA_per_site_per_gen' ~ 'A:T > T:A',
+            mut_type == 'AT_CG_per_site_per_gen' ~ 'A:T > C:G'
+          ))
+
+fig_2a <-
+fig_2a_data |>
+  filter(!(type %in% c('Ts', 'Tv'))) |> 
+  mutate(type = factor(type, levels = c("SNM", "A:T > C:G", "A:T > G:C", "A:T > T:A", "G:C > A:T", "G:C > C:G", "G:C > T:A"))) |>
+   ggplot(aes(x = type, group = Species)) +
+      scale_y_log10(guide = "axis_logticks", labels = label_log(), limits = c(1e-11, 5e-8), expand = c(0, 0)) +
+      scale_x_discrete() +
+      scale_color_manual(values = ct) +
+      theme(legend.text = element_markdown(),
+            axis.text.x = element_text(size = 15),
+            legend.title = element_blank(),
+            axis.ticks.length.y = unit(1/10, "in"),
+            legend.position=c(0.85, 0.8),
+            legend.background = element_rect(color="black")) +
+      labs(x = "SNM Type", y = 'SNM / Site / Generation', color = "Species") +
+      geom_segment(aes(y = mean, yend = 1e-11, color = Species), position = position_dodge(width = 0.9), linewidth = 10) +
+      geom_errorbar(aes(ymin = mean - sem,
+                        ymax = mean + sem),
+                    color = 'black', width = 0.3, linewidth = 0.6, position = position_dodge(width = 0.9)) +
+      geom_vline(xintercept = c(seq(from = 1.5, to = 6.5, by = 1))) 
+
+fig_2a +  canvas(width = 11, height = 5, units = 'in')
+```
+
+### Figure 2B
+
+```{r fig_2b}
+# import Lynch et al. 2023 data
+lynch2023 <-
+  read_csv(here('data', 'lynch2023_cleaned.csv')) |>
+  summarise(across(everything(), \(x) mean(x, na.rm = TRUE)),
+            .by = c(species, organism_type)) |>
+  mutate(genome_size = genome_size_Mb * 1000000,
+         coding_sites = coding_sites_Mb * 1000000) |>
+  filter(species != 'Mycoplasma mycoides JCVI-syn1.0')  # remove synthetic organism
+
+
+fig_2b_data <-
+  fig_2a_data |>
+  filter(!grepl('snm|ts|tv', mut_type)) |>
+  dplyr::select(species, mut_type, mean) |>
+  pivot_wider(names_from = mut_type, values_from = mean) |>
+  mutate(at_bias = (GC_AT_per_site_per_gen + GC_TA_per_site_per_gen) / (AT_GC_per_site_per_gen + AT_CG_per_site_per_gen),
+         equilibrium_at_composition = at_bias / (1 + at_bias)) |>
+  dplyr::rename(sp = species) |>
+  full_join(
+    data.frame(
+      sp = c('a', 'c', 'l'),
+      species = c('Lactobacillus acidophilus', 'Lactobacillus crispatus', "Lactococcus lactis"),
+      organism_type = rep('Bacteria', 3),
+      snm_per_site_per_gen = c(fig_2a_data |> filter(mut_type == 'snm_per_site_per_gen', species == 'a') |> pull(mean),
+                               fig_2a_data |> filter(mut_type == 'snm_per_site_per_gen', species == 'c') |> pull(mean),
+                               fig_2a_data |> filter(mut_type == 'snm_per_site_per_gen', species == 'l') |> pull(mean)),
+      genome_size = c(oget('a', '_genome_length'), oget('c', '_genome_length'), oget('l', '_withPlasmids_genome_length')),
+      at_composition = c(1 - oget('a', '_gc'), 1 - oget('c', '_gc'), 1 - oget('l', '_gc'))),
+    by = 'sp') |>
+  mutate(Ne = case_when(sp == 'a' | sp == 'c' ~  0.0042 / (2 * snm_per_site_per_gen), # estimated pi / (2 * snm rate)
+                        sp == 'l' ~ 68874566, # number from Long et al Nature Eco Evo
+                        TRUE ~ NA),
+         organism_type = 'Bacteria') |> 
+  dplyr::select(species, genome_size, organism_type, snm_per_site_per_gen, genome_size, Ne, at_composition, at_bias, equilibrium_at_composition) |>
+  full_join(lynch2023 |>
+              dplyr::select(species, genome_size, organism_type, snm_per_site_per_gen, genome_size, Ne, at_composition, at_bias, equilibrium_at_composition)) |>
+  mutate(this_MA = case_when(species %in% c('Lactobacillus acidophilus', 'Lactobacillus crispatus', "Lactococcus lactis") ~ TRUE,
+                             TRUE ~ FALSE),
+         col = case_when(species %in% c('Lactobacillus acidophilus', 'Lactobacillus crispatus', "Lactococcus lactis", "Escherichia coli K12", "Lactococcus lactis DSMZ20481", "Streptococcus pneumoniae D39", "Streptococcus suis", "Thermococcus eurythermalis A501") ~ TRUE,
+                         TRUE ~ FALSE), 
+         org_type = case_when(organism_type %in% c('Archaea', 'Bacteria') ~ 'Prokaryotes',
+                          organism_type %in% c('Invertebrates', 'Vascular Plants', 'Vertebrates') ~ 'Multicellular Eukaryotes',
+                          organism_type %in% c('Unicellular Eukaryotes') ~ 'Unicellular Eukaryotes',
+                          TRUE ~ NA),
+         type = case_when(org_type %in% c('Unicellular Eukaryotes', 'Multicellular Eukaryotes') ~ 'Eukaryotes',
+                          TRUE ~ org_type),
+         cellularity = case_when(org_type == 'Prokaryotes' | org_type == 'Unicellular Eukaryotes' ~ 'Unicellular',
+                                 org_type == 'Multicellular Eukaryotes' ~ 'Multicellular',
+                                 TRUE ~ NA)) |>
+           filter(!is.na(type)) |>
+  mutate(sp = case_when(species == "Escherichia coli K12" ~ "*E. coli* (Lee et al. 2012)",
+                        species == "Lactococcus lactis DSMZ20481" ~ "*L. lactis* aerobic (Long et al. 2018)",
+                        species == "Thermococcus eurythermalis A501" ~ "*T. eurythermalis* (Gu et al. 2021)",
+                        species == "Streptococcus pneumoniae D39" ~ "*S. pneumoniae* (Jiang et al. 2024)",
+                        species == "Streptococcus suis" ~ "*S. suis* (Murray et al. 2021)",
+                        species == "Lactobacillus acidophilus" ~ "*L. acidophilus* (This MA)",
+                        species == "Lactobacillus crispatus" ~ "*L. crispatus* (This MA)",
+                        species == "Lactococcus lactis" ~ "*L. lactis* (This MA)"),
+         equilibrium_at_composition = case_when(is.na(equilibrium_at_composition) ~ at_bias / (1 + at_bias),
+                                                TRUE ~ equilibrium_at_composition),
+         fixation_bias = at_composition / (at_bias - at_bias * at_composition))  
+
+
+fig_2b_data$type <- factor(fig_2b_data$type, levels = c('Prokaryotes', 'Eukaryotes'))
+fig_2b_data$sp <- factor(fig_2b_data$sp, levels = c("*L. acidophilus* (This MA)", "*L. crispatus* (This MA)", "*L. lactis* (This MA)",
+                                                    "*L. lactis* aerobic (Long et al. 2018)", "*S. pneumoniae* (Jiang et al. 2024)", "*S. suis* (Murray et al. 2021)", "*T. eurythermalis* (Gu et al. 2021)", "*E. coli* (Lee et al. 2012)"))
+
+
+```
+
+```{r fig_2b}
+# AT bias vs AT comp + fixation bias
+fig_2b <-
+  fig_2b_data |>
+  dplyr::select(at_composition, at_bias, equilibrium_at_composition, this_MA, col, fixation_bias,
+                sp, type) |>
+  filter(!is.na(at_bias),
+         !is.na(at_composition),
+         !is.na(equilibrium_at_composition),
+         !is.na(fixation_bias)) |>
+  ggplot(aes(x = at_bias, y = at_composition)) +
+  labs(x = 'AT Mutation Bias'
+      , y = 'Genome AT Composition'
+      , fill = 'Species'
+      , shape = 'Organism Type') + 
+  scale_x_log10(guide = "axis_logticks"
+              , labels = label_log()
+              , limits = c(1e-1, 1e2)
+              , expand = c(0, 0)) +
+  scale_y_log10(guide = "axis_logticks"
+              , labels = label_log()
+              , limits = c(1e-1, 1e0)
+              , expand = c(0, 0)
+              , breaks = c(1e-1, 1e0)) +
+  scale_shape_manual(values = c(25, 23)) +
+  scale_size_manual(values = c(3, 4.5), guide = 'none') +
+  scale_fill_continuous_divergingx(palette = 'RdYlBu', mid = 1, name = "A/T : G/C\nFixation Bias", breaks = c(0, 1, 2), limits = c(0, 2.00091609)) +
+  geom_function(linetype = 'solid', fun = function(x) x/(1 + x), color = 'darkgray') +
+  geom_function(linetype = 'dashed', fun = function(x) (1/2)*x/(1 + (1/2)*x), color = 'darkgray') +
+  geom_function(linetype = 'dotted', fun = function(x) (1/8)*x/(1 + (1/8)*x), color = 'darkgray') +
+  geom_point(aes(shape = type, fill = fixation_bias)) +
+  new_scale_fill() +
+  scale_fill_manual(values = c(ct[4:length(ct)], ct[1:3]), guide = guide_legend(theme = theme(legend.text = element_markdown()))) +
+    geom_point(data = fig_2b_data |> filter(col, !this_MA)
+             , shape = 25,
+             size = 3
+             , color = 'black'
+             , aes(fill = sp, size = this_MA)) +
+      geom_point(data = fig_2b_data |> filter(this_MA)
+             , shape = c(21, 22, 24),
+             size = 5
+             , color = 'black'
+             , aes(fill = sp, size = this_MA)) +
+         guides(fill = guide_legend("Species", override.aes = list(shape = c(25, 25, 25, 25, 25, 21, 22, 24)),
+                                    theme = theme(legend.text = element_markdown())),
+            shape = guide_legend("Organism Type")) +
+    theme(aspect.ratio = 1
+     ,   axis.ticks.length.x = unit(1/10, "in")
+     ,   axis.ticks.length.y = unit(1/10, "in")
+     , legend.box = 'horizontal'
+     , plot.margin = margin(1,1,1,1, "cm")
+     ) 
+
+fig_2b + 
+  theme(legend.position = 'none') + 
+  canvas(5, 5, 'in')
+
+fig_2b + 
+  canvas(15, 5, 'in')
+
+```
+
+### Figure 2C
+
+```{r}
+fig_2c_data <-
+  fig_2b_data |>
+    filter(!(is.na(Ne)),
+         !(is.na(snm_per_site_per_gen))) |>
+  dplyr::select(Ne, snm_per_site_per_gen, org_type, this_MA, col, sp)
+fig_2c_data$org_type <- factor(fig_2c_data$org_type, levels = c('Prokaryotes', 'Unicellular Eukaryotes', 'Multicellular Eukaryotes'))
+
+ne_snm_lm <-
+lm(data = fig_2c_data |> filter(org_type == 'Prokaryotes', !this_MA),
+   formula = log10(snm_per_site_per_gen) ~ log10(Ne)) 
+
+fig_2c_data$predicted <- 10 ^ predict(ne_snm_lm, fig_2c_data)
+  
+fig_2c <-
+  fig_2c_data |>
+  ggplot(aes(x = Ne, y = snm_per_site_per_gen)) +
+  theme(aspect.ratio = 1
+    , legend.text = element_markdown(size = 10)
+    , legend.title  = element_text(size = 13)
+    ,   axis.ticks.length.x = unit(1/10, "in")
+    ,   axis.ticks.length.y = unit(1/10, "in"),
+    legend.box = 'horizontal',
+     plot.margin = margin(1,1,1,1, "cm")) +
+  labs(x = 'Ne', y = 'SNM / Site / Generation', fill = 'Species') + 
+  scale_x_log10(guide = "axis_logticks", labels = label_log()) +
+  scale_y_log10(guide = "axis_logticks", labels = label_log()) +
+  scale_shape_manual(values = c(25, 9, 5)) +
+  scale_fill_manual(values = ct) +
+  scale_size_manual(values = c(3, 4.5), guide = 'none') +
+  scale_linetype_manual(values = c('solid', 'longdash', 'dashed')) +
+  geom_point(data = fig_2c_data |> filter(!col, !this_MA),
+               alpha = 0.5
+             , aes(shape = org_type)) + 
+  geom_smooth(data = fig_2c_data |> filter(!this_MA)
+              , aes(linetype = org_type)
+              , method = 'lm'
+              , color = 'darkgray'
+              , alpha = 0.2
+              ) +
+  geom_point(data = fig_2c_data |> filter(this_MA),
+             shape = c(21, 22, 24),
+             #shape = 'square',
+             size = 5,
+             aes(fill = sp)) +
+      geom_point(data = fig_2c_data |> filter(col, !this_MA)
+             , shape = 25
+             , size = 3
+             , aes(fill = sp)) +
+  geom_segment(data = fig_2c_data |> filter(this_MA),
+               aes(x = Ne,
+                   xend = Ne,
+                   y = snm_per_site_per_gen,
+                   yend = predicted)) +
+   guides(
+    linetype = guide_legend("Organism Type", override.aes = list(color = 'black')),
+   fill = guide_legend(override.aes = list(size = c(5, 5, 5, 3, 3, 3, 3, 3), shape = c(21, 22, 24, 25, 25, 25, 25, 25))),
+    shape = guide_legend("Organism Type", override.aes = list(size = 5)))
+   
+fig_2c + 
+  canvas(15, 5, 'in')
+fig_2c + 
+  theme(legend.position = 'none')  + 
+  canvas(6, 6, 'in')
+
+```
+
+## Figure 3
+
+```{r fig_3a}
+
+fig_3a_heatmap <- read.csv(here('data', 'fig_3a_data.csv'))
+fig_3a_gc <- read.csv(here('data', 'fig_3a_gc.csv'))
+fig_3a_cds <- read.csv(here('data', 'fig_3a_cds.csv'))
+fig_3a_snmPOS <- read.csv(here('data', 'fig_3a_snmPOS.csv'))
+
+
+fig_3a <-
+  fig_3a_heatmap |>
+  pivot_longer(cols = ends_with('rate'), names_to = 'mut_type', values_to = 'rate') |>
+  mutate(Y = case_when(mut_type == "GC_to_AT_snm_rate" ~ 6,
+                       mut_type == "AT_to_GC_snm_rate" ~ 5,
+                       mut_type == "AT_to_TA_snm_rate" ~ 3,
+                       mut_type == "AT_to_CG_snm_rate" ~ 4,
+                       mut_type == "GC_to_TA_snm_rate" ~ 2,
+                       mut_type == "GC_to_CG_snm_rate" ~ 1)) |>
+  mutate(Y = Y + 8) |>
+  ggplot(aes(x = start)) +
+  # rate heatmap
+  geom_rect(aes(xmin = start, xmax = end, ymin = Y - 0.4, ymax = Y + 0.4, fill = rate), color = 'black')  + coord_polar() +
+  scale_fill_gradient(low = 'white', high = ct[1], breaks = c(0, 2e-8, 4e-8, 6e-8), labels = c("0",
+                                                                                               expression("2 x 10"^-8),
+                                                                                               expression("4 x 10"^-8),
+                                                                                               expression("6 x 10"^-8))) + 
+  scale_y_continuous(limits = c(0, 16)) +
+    scale_color_manual(values = c("TRUE" = ct[2], "FALSE" = ct[1], '+' = ct[2], '-' = ct[1])) +  # Set colors
+ # gc content black line
+  geom_line(data = fig_3a_gc,
+              aes(x = range_midpoint, y = 2 + range_gc_content * 4)) +
+  # cds annotations
+  geom_segment(data = fig_3a_cds, aes(x = start, xend = start, y = Strand, yend = Strand + 0.5, color = strand)) +
+  # color for CDS
+    scale_color_manual(values = c('+' = ct[2], '-' = ct[1]), name = 'CDS Strand') +  # Set colors
+
+  # set new color scale for gc skew
+      guides(color = guide_legend(override.aes = list(linewidth = 10)))+  # Adjust line size in the legend
+
+    new_scale_color() +
+
+  # gc skew
+  geom_line(data = fig_3a_gc,
+            aes(x = range_midpoint,
+                y = 5.5 + range_gc_skew * 3, group = segment, colour = range_gc_skew > 0)) +
+  
+  scale_color_manual(values = c("FALSE" = ct[2], "TRUE" = ct[1]), name = 'GC Skew',
+                     labels = c('FALSE' = '< 0', 'TRUE' = '> 0')) +  # Set colors
+
+  geom_hline(yintercept = 2 + c(0.25, 0.5) * 4, linetype = 1, color = 'gray') + # composition ranges
+  geom_hline(yintercept = 5.5 + c(-0.25, 0.25) * 3 , linetype = 2, color = 'gray') + # skew ranges
+  labs(fill = 'SNM Rate',
+       x = 'Genome Position') +
+  theme(panel.border = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        #axis.text.x = element_blank(),
+        #axis.text.x = element_text(size = 20),
+        plot.margin = unit(rep(1, times = 4), "cm"),
+        legend.text = element_text(face = 'plain'),
+        aspect.ratio = 1) +
+  scale_x_continuous(breaks = c(1, 500000, 1000000, 1500000, a_genome_length),
+                     labels = c('0 Mb', '0.5 Mb', '1 Mb', '1.5 Mb', paste0(as.character((a_genome_length / 1e6) |> round(digits = 2)), ' Mb')),
+                     limits = c(1, a_genome_length)) +
+  # snm locations
+  geom_segment(data = fig_3a_snmPOS, aes(x = POS, xend = POS, y = Y - 0.4, yend = Y + 0.4), color = ct[2], alpha = 0.5) +
+  geom_segment(y = 15 - 0.4, yend = 15 - 0.4, 
+               x = 1, xend = a_genome_length) + 
+    geom_segment(y = 15 + 0.4, yend = 15 + 0.4,
+               x = 1, xend = a_genome_length) +
+    guides(color = guide_legend(override.aes = list(linewidth = 10))) + # Adjust line size in the legend
+    geom_text(x = 1, y = 16.5, label = 'oriC')
+
+fig_3a + canvas(width = 10, height = 10, units = 'in')
+
+
+```
+
+```{r fig_3b}
+fig_3b_data <- read.csv(here('data', 'snmRate_distOriC.csv'))
+
+fig_3b <-
+  fig_3b_data |>
+  filter(species == 'a') |>
+  ggplot(mapping = aes(x = dist_to_oriC_1, y = snm_rate, fill = snm_type, color = snm_type)) +
+    geom_point(aes(shape = snm_type), color = 'black') +
+  geom_smooth(method = 'gam') +
+  scale_y_continuous(limits = c(0, 1e-7),
+                     breaks = c(0, 2.5e-8, 5.0e-8, 7.5e-8, 1e-7),
+                     labels = expression(0, 2.5%*%10^-8, 5.0%*%10^-8, 7.5%*%10^-8, 1.0%*%10^-7)) +
+  scale_x_continuous(labels = c(0, 250, 500, 750, 1000),
+                     breaks = c(0, 2.5e5, 5e5, 7.5e5, 1e6)) +
+  scale_shape_manual(values = c(21, 21, 21, 22, 21, 21)) +
+  scale_fill_manual(values = c(
+ "G:C > A:T" = ct[2],
+ "A:T > G:C" = ct[7],
+"A:T > T:A" = ct[3],
+"A:T > C:G" = ct[8],
+"G:C > T:A" = ct[5],
+"G:C > C:G" = ct[1])) +
+   scale_color_manual(values = c(
+ "G:C > A:T" = ct[2],
+ "A:T > G:C" = ct[7],
+"A:T > T:A" = ct[3],
+"A:T > C:G" = ct[8],
+"G:C > T:A" = ct[5],
+"G:C > C:G" = ct[1]), guide = 'none') +
+  labs(x = 'Distance to oriC (kb)',
+       y = 'SNM / Site / Generation',
+       fill = 'SNM Type',
+       shape = 'SNM Type') +
+  theme(legend.position = c(0.8, 0.8),
+        aspect.ratio = 1,
+        legend.background = element_rect(color = 'black'),
+        plot.margin = unit(c(1, 1, 1, 1), "cm")) +
+  guides(fill = guide_legend(override.aes = list(size = 5, linewidth = 0))) 
+fig_3b + canvas(8,8)
+
+# calculate spearman correlation metrics
+ori_dist_corr <-
+  fig_3b_data |>
+  dplyr::select(-X, -start, -end, -width) |>
+  mutate(species = case_when(species == 'a' ~ 'L. acidophilus',
+                             species == 'c' ~ 'L. crispatus',
+                             species == 'l' ~ 'L. lactis')) |> 
+  nest(data = c(-species, -snm_type)) |>
+  mutate(cor=map(data,~cor.test(.x$snm_rate, .x$dist_to_oriC_1, exact = FALSE, method = "sp"))) |>
+  mutate(tidied = map(cor, broom::tidy)) |>
+  unnest(tidied)  |>
+  dplyr::select(species, snm_type, estimate, p.value)
+
+```
+
+```{r fig_3c}
+AnGC <- read.table(here('data', 'Ancestor_Growth_Anaerobic.txt'),sep="\t",header=TRUE)
+
+AnGC_melt<-reshape2::melt(AnGC, id=c("Time"))
+#AnGC_melt
+names(AnGC_melt)<-c("Time","Well","OD600")
+Lactis_1=AnGC_melt$Well %in% c("B3","C3","D3","E3","F3")
+Crispatus_1=AnGC_melt$Well %in% c("B4","C4","D4","E4","F4")
+Acidophilus_1=AnGC_melt$Well %in% c("B5","C5","D5","E5","F5")
+Lactis_2=AnGC_melt$Well %in% c("B6","C6","D6","E6","F6")
+Crispatus_2=AnGC_melt$Well %in% c("B7","C7","D7","E7","F7")
+Acidophilus_2=AnGC_melt$Well %in% c("B8","C8","D8","E8","F8")
+Lactis_3=AnGC_melt$Well %in% c("B9","C9","D9","E9","F9")
+Crispatus_3=AnGC_melt$Well %in% c("B10","C10","D10","E10","F10")
+Acidophilus_3=AnGC_melt$Well %in% c("B11","C11","D11","E11","F11")
+
+AnGC_melt$Clone[Lactis_1]="Lactis_1"
+AnGC_melt$Clone[Crispatus_1]="Crispatus_1"
+AnGC_melt$Clone[Acidophilus_1]="Acidophilus_1"
+AnGC_melt$Clone[Lactis_2]="Lactis_2"
+AnGC_melt$Clone[Crispatus_2]="Crispatus_2"
+AnGC_melt$Clone[Acidophilus_2]="Acidophilus_2"
+AnGC_melt$Clone[Lactis_3]="Lactis_3"
+AnGC_melt$Clone[Crispatus_3]="Crispatus_3"
+AnGC_melt$Clone[Acidophilus_3]="Acidophilus_3"
+
+Lactis=AnGC_melt$Clone %in% c("Lactis_1","Lactis_2","Lactis_3")
+Crispatus=AnGC_melt$Clone %in% c("Crispatus_1","Crispatus_2","Crispatus_3")
+Acidophilus=AnGC_melt$Clone %in% c("Acidophilus_1","Acidophilus_2","Acidophilus_3")
+
+AnGC_melt$Species[Lactis]="Lc. lactis"
+AnGC_melt$Species[Crispatus]="Lb. crispatus"
+AnGC_melt$Species[Acidophilus]="Lb. acidophilus"
+
+Rep1=AnGC_melt$Clone %in% c("Lactis_1","Crispatus_1","Acidophilus_1")
+Rep2=AnGC_melt$Clone %in% c("Lactis_2","Crispatus_2","Acidophilus_2")
+Rep3=AnGC_melt$Clone %in% c("Lactis_3","Crispatus_3","Acidophilus_3")
+
+AnGC_melt$Replicate[Rep1]="Rep1"
+AnGC_melt$Replicate[Rep2]="Rep2"
+AnGC_melt$Replicate[Rep3]="Rep3"
+
+
+AnGC_melt<-AnGC_melt[which(AnGC_melt$Clone!="Lactis_2"),]
+
+
+fig_3c <-
+  AnGC_melt |>
+  mutate(Species = paste0('*', 
+                          paste0(substr(Species, 1, 1), substr(Species, 3, nchar(Species))),
+                          '*')) |>
+  ggplot(aes(x = Time, y = OD600, fill = Species, color = Species))+
+  geom_smooth()+ 
+  stat_summary(fun=mean,geom="point", aes(shape = Species), color = 'black', size = 2) +
+
+  scale_shape_manual(values = c(21, 22, 24)) +
+  xlab("Time (h)")+
+  ylab("Absorbance [OD600]")+
+  xlim(c(0,16))+
+  scale_color_manual(values=c("#BF4F26","#024873","#D9AA1E")) +
+  scale_fill_manual(values=c("#BF4F26","#024873","#D9AA1E")) +
+  theme(legend.position=c(0.21,0.82),
+        legend.background = element_rect(color="black"),
+        legend.text = element_markdown())
+
+fig_3c + canvas(7,5)
+```
+
+```{r fig_3d}
+fig_3d_data <-
+  read.delim(here('data', 'iRep_bPTR_results.tsv'), header = FALSE) |>
+  rowwise() |>
+  mutate(line = str_split(str_split(V1, '/', n = 2)[[1]][2], '\\.')[[1]][1],
+         species = str_split(V1, '/', n = 2)[[1]][1]) |> 
+  ungroup() |>
+  dplyr::select(-V1) |>
+  dplyr::rename(oriC = V2, ter = V3, ptr = V4) |> 
+  filter(!(line %in% c("8855-MB-134_S1_L005", "8855-MB-133_S1_L005", "8855-MB-135_S1_L005"))) |>
+  mutate(Species = paste0('*L. ', species, '*'))
+
+# do stats tests
+ptr_kruskal <- kruskal.test(ptr ~ Species, data = fig_3d_data)
+ptr_dunn <- dunn.test(x = fig_3d_data$ptr, fig_3d_data$Species, method = "bonferroni")
+
+# prep data for adding to plot
+p_df <- data.frame(comparisons = ptr_dunn$comparisons, p = ptr_dunn$P.adjusted) |>
+  separate_wider_delim(cols = comparisons, delim = " - ", names = c('group1', 'group2')) |>
+  mutate(y.position = c(8.5, 9.3, 7.7),
+         p = signif(p, 3)) 
+
+
+fig_3d <- 
+  fig_3d_data |>
+  ggplot(aes(x = Species, y = ptr)) +
+  geom_hline(yintercept = 1, linetype = 'dotted') +
+  geom_boxplot(alpha = 0.2, outliers = FALSE, aes(fill = Species)) +
+  geom_quasirandom(aes(shape = Species, fill = Species)) +
+  scale_fill_manual(values = ct) +
+  scale_shape_manual(values = c(21, 22, 24)) +
+  scale_y_continuous(limits = c(0, 10.5), expand = c(0,0), breaks = c(0, seq(1, 11, by = 2))) +
+  theme(axis.text.x = element_markdown(size = 12),
+        legend.text = element_markdown(),
+        legend.position = 'none',
+        aspect.ratio = 1) +
+  labs(y = 'Peak-to-Trough Ratio') +
+  stat_pvalue_manual(p_df, label = "p = {p}")  +
+  annotate(geom = 'text', x =3.2, y = 9.95, label = paste0("Kruskal-Wallis \np = ", as.character(signif(ptr_kruskal$p.value, 3))))
+
+fig_3d + canvas(5,5)
+```
+
+## Figure 4
+
+```{r fig_4a}
+fig_4a_data <-
+  small_mutation_table |>
+  rowwise() |>
+  mutate(species = substring(species, 4, 4) |> tolower()) |>
+  ungroup() |> 
+  filter(mut_type %in% c('INS', 'DEL'),
+         !complex_mutation) |>
+    dplyr::select(species, line, mut_type) |> 
+  # add count for observed mutations
+  mutate(mut_indel = 1) |> 
+  # add empty mutation rows to catch 0s
+  rbind(expand.grid(line = all_lines,
+                mut_type = c("INS", 'DEL')) |>
+    mutate(species = case_when(grepl('9105', line) ~ 'a',
+                               grepl('8855', line) ~ 'c',
+                               grepl('9106', line) ~ 'l',
+                               TRUE ~ NA),
+           mut_indel = 0)) |> 
+  # numerically annotate each mutation type
+  mutate(
+         mut_INS = case_when(mut_type == "INS" ~ mut_indel,
+                               TRUE ~ 0),
+         mut_DEL = case_when(mut_type == "DEL" ~ mut_indel,
+                               TRUE ~ 0))|>
+  # get total counts for each mutation type
+  summarise(total_INS_count = sum(mut_INS),
+            total_DEL_count = sum(mut_DEL),
+            total_INDEL_count = sum(mut_INS) + sum(mut_DEL),
+            .by = c(species, line)) |>
+    # calculate per generation per site rates
+  rowwise() |>
+  mutate(
+    INS_per_site_per_gen = total_INS_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    DEL_per_site_per_gen = total_DEL_count / oget(species, '_genome_length') / oget(species, '_generations'),
+    INDEL_per_site_per_gen = total_INDEL_count / oget(species, '_genome_length') / oget(species, '_generations'),) |>
+  # calculate species mean & sem
+  dplyr::select(species, line, ends_with('per_site_per_gen')) |>
+  pivot_longer(ends_with('per_site_per_gen'), names_to = 'mut_type', values_to = 'per_site_per_gen') |>
+  summarise(mean = mean(per_site_per_gen),
+            sem = sd(per_site_per_gen) / n(),
+            .by = c(species, mut_type)) |>
+  # make nice species labels
+   mutate(Species = case_when(species == 'a' ~ '*L. acidophilus*',
+                             species == 'c' ~ '*L. crispatus*',
+                             species == 'l' ~ '*L. lactis*'),
+          type = case_when(
+            mut_type == 'INS_per_site_per_gen' ~ 'INS',
+            mut_type == 'DEL_per_site_per_gen' ~ 'DEL',
+            mut_type == 'INDEL_per_site_per_gen' ~ 'INDEL'))
+
+
+# set constant
+fig_4a_ymin <- 1e-11
+# make plot
+fig_4a <-
+  fig_4a_data |> filter(type != 'INDEL') |>
+   ggplot(aes(x = type, group = Species)) +
+    scale_y_log10(guide = "axis_logticks", labels = label_log(), limits = c(fig_4a_ymin, 1e-8), expand = c(0, 0)) +
+    scale_x_discrete(expand = expansion(mult = c(0.5, 0.5))) +
+    #scale_x_discrete(expand = expansion(mult = c(0.25, 0.25))) +
+    scale_color_manual(values = ct) +
+    labs(x = "Small Indel Type", y = 'Small Indels / Site / Generation', color = "Species") +
+    geom_vline(xintercept = c(1.5, 2.5)) +
+    geom_segment(aes(y = mean, yend = fig_4a_ymin, color = Species), position = position_dodge(width = 0.9), linewidth = 10) +
+    geom_errorbar(aes(ymin = mean - sem,
+                      ymax = mean + sem),
+                  color = 'black', width = 0.3, linewidth = 0.6, position = position_dodge(width = 0.9)) +
+    theme(legend.text = element_markdown(),
+          legend.title = element_blank(),
+          axis.ticks.length.y = unit(1/10, "in"),
+           plot.margin = unit(c(1, 1, 1, 1), "cm"))
+
+
+fig_4a + canvas(width = 7, height = 5, units = 'in')
+
+```
+
+```{r fig_4b}
+sv <-
+  read_excel(
+    path = here('data',
+                'structural_variants.xlsx')) |> 
+  mutate(start = case_when(!is.na(transposition_destination) ~ transposition_destination,
+                           TRUE ~ del_inv_dup_start),
+         end = case_when(!is.na(transposition_destination) ~ transposition_destination,
+                           TRUE ~ del_inv_dup_end),
+         # seqnames = case_when(species == 'acidophilus' ~ names(a_fna),
+         #                      species == 'crispatus' ~ names(c_fna),
+         #                      species == 'lactis' ~ names(l_fna)),
+         sv_type = case_when(grepl('transposition', event_type) ~ 'transposition',
+                             grepl('deletion', event_type) ~ 'deletion',
+                             grepl('duplication', event_type) ~ 'duplication',
+                              TRUE ~ 'error')) 
+  # makeGRangesFromDataFrame(ignore.strand = TRUE,
+  #                          keep.extra.columns = TRUE)
+
+sv_rates <- 
+  sv |>
+  as.data.frame() |> 
+  dplyr::select(species, line, sv_type) |>
+  mutate(mut = 1,
+         line = paste0(line, '_S1_L005'),
+         species = substring(species, 1, 1)) |>
+  rbind(
+    expand.grid(line = all_lines,
+                sv_type = c("transposition", "duplication", "deletion")) |>
+                   mutate(species = case_when(grepl('9105', line) ~ 'a',
+                                              grepl('8855', line) ~ 'c',
+                                              grepl('9106', line) ~ 'l'),
+           mut = NA)) |>
+    # count mutations per line by type
+  summarise(line_mut_count = sum(mut, na.rm = TRUE),
+            .by = c(species, line, sv_type)) |>
+  # calculate each line's mutation rate for each mutation type.
+  # rate = number of observed mutations / (genome length * MA generations)
+  rowwise() |>
+  mutate(line_per_genome_per_generation = line_mut_count / oget(species, '_generations')) |>
+  ungroup() |>
+  group_by(species, sv_type) |>
+  summarise(total = sum(line_mut_count),
+            per_genome_per_gen = mean(line_per_genome_per_generation),
+            per_genome_per_gen_se = sd(line_per_genome_per_generation) / sqrt(n()),
+            .groups = 'drop') |>
+  mutate(Species = case_when(species == 'a' ~ '*L. acidophilus*',
+                             species == 'c' ~ '*L. crispatus*',
+                             species == 'l' ~ '*L. lactis*'),
+         type = case_when(sv_type == 'deletion' ~ 'Deletion',
+                          sv_type == 'duplication' ~ 'Duplication', 
+                          sv_type == 'transposition' ~ 'Transposition'))
+fig_4b <-
+  sv_rates |> 
+   ggplot(aes(x = type, group = Species)) +
+  scale_y_log10(guide = "axis_logticks", labels = label_log(),  expand = c(0, 0)) + coord_cartesian(ylim = c(1e-6, 1e-2)) +
+  #scale_x_discrete(expand = c(0,0)) +
+  scale_x_discrete(expand = expansion(mult = c(0.25, 0.25))) +
+  scale_color_manual(values = ct) +
+  theme(legend.text = element_markdown(),
+        axis.text.x = element_text(size = 12),
+        legend.title = element_blank(),
+        axis.ticks.length.y = unit(1/10, "in"),
+        plot.margin = margin(t = 20, r = 10, b = 10, l = 10)) +
+  labs(x = "SV Type", y = 'SV / Genome / Generation', color = "Species") +
+
+  geom_segment(aes(y = per_genome_per_gen, yend = 1e-6, color = Species), position = position_dodge(width = 0.9), linewidth = 10) +
+  geom_errorbar(aes(ymin = per_genome_per_gen - per_genome_per_gen_se,
+                    ymax = per_genome_per_gen + per_genome_per_gen_se),
+                color = 'black', width = 0.3, linewidth = 0.6, position = position_dodge(width = 0.9)) +
+  #geom_vline(xintercept = 0.705) 
+  geom_segment(aes(x = 0.7025, 
+                   xend = 0.7025,
+                   y = sv_rates |> filter(species == 'a', type == 'Deletion') |> pull(per_genome_per_gen) + sv_rates |> filter(species == 'a', type == 'Deletion') |> pull(per_genome_per_gen_se),
+                   yend = 1e-6),
+               color = 'black') + 
+    geom_vline(xintercept = c(seq(from = 1.5, to = 2.5, by = 1)))
+
+fig_4b + canvas(width = 7, height = 5, units = 'in')
+
+```
+
+```{r fig_4c}
+crispr_del_data <- read_excel(here('data', 'crispatus_crispr_deletions.xlsx'))  |>
+  dplyr::mutate(end1 = end + 1)
+
+array2 <-
+  crispr_del_data |> 
+  dplyr::filter(start > 1000000) |> 
+  mutate(Y = case_when(line == 'Ancestor' ~ 4,
+                       line == '8855-MB-065_S1_L005' ~ 3,
+                       line == '8855-MB-018_S1_L005' ~ 2,
+                       line == '8855-MB-061_S1_L005' ~ 1),
+         Ywidth = case_when(feature != 'Deletion' ~ 0.4,
+                           feature == 'Deletion' ~ 0.1),
+         Ylab = case_when(line == 'Ancestor' ~ 'Ancestor',
+                          line == '8855-MB-018_S1_L005' ~ 'MA',
+                          TRUE ~ NA)) 
+
+
+array2_plot <- 
+  array2 |>
+  ggplot(aes(xmin = start, xmax = end1,
+             ymin = Y - Ywidth, ymax = Y + Ywidth,
+             fill = feature,
+             color = feature)) +
+  geom_rect(data = array2 |> filter(feature == 'Deletion')) +
+
+  geom_rect(data = array2 |> filter(feature == 'Spacer')) +
+  geom_rect(data = array2 |> filter(feature == 'Repeat')) +
+
+  theme(legend.title = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          panel.border = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x = element_text(size = 15, face = 'bold'),
+          legend.background = element_rect(fill = "transparent", color = NA),
+          axis.ticks.length = unit(0.5, "cm"),
+          axis.minor.ticks.length = rel(0.5),
+          legend.position = 'bottom') +
+      scale_fill_manual(values = c('Deletion' = ct[1], 'Spacer' = 'black', 'Repeat' = 'gray')) + 
+      scale_color_manual(values = c('Deletion' = ct[1], 'Spacer' = 'black', 'Repeat' = 'gray')) + 
+      scale_x_continuous(
+        limits = c(min(array2$start) - 10, max(array2$end1)),
+        labels = label_comma(),
+                       breaks = seq(min(array2$start)+ 70, max(array2$end1) + 1, by = 100),
+                       minor_breaks = seq(min(array2$start), max(array2$end1) + 1, by = 10),
+                       guide = guide_axis(minor.ticks = TRUE),
+                       name = 'Genome Position') +
+    geom_text(data = array2 |> filter(Ylab == 'MA'),
+              aes(label = Ylab, x = min(array2$start) - 10, y = Y), size = 6, color = 'black',  hjust = 1, fontface = 'bold') +
+    geom_text(data = array2 |> filter(Ylab == 'Ancestor'),
+              aes(label = Ylab, x = min(array2$start) - 3, y = Y), size = 6, color = 'black',  hjust = 1, fontface = 'bold') +
+    annotate("text", x = min(array2$start) - 5, y = 2.35, label = "{", size = 20) 
+
+
+
+array1 <-
+  crispr_del_data |>
+  filter(start < 1000000) |>
+  mutate(Y = case_when(line == 'Ancestor' ~ 2,
+                       line == '8855-MB-115_S1_L005' ~ 1),
+         Ywidth = case_when(feature != 'Deletion' ~ 0.4,
+                           feature == 'Deletion' ~ 0.1),
+         Ylab = case_when(line == 'Ancestor' ~ 'Ancestor',
+                          line == '8855-MB-115_S1_L005' ~ 'MA',
+                          TRUE ~ NA)) 
+
+array1_plot <- 
+  array1 |>
+  ggplot(aes(xmin = start, xmax = end1,
+             ymin = Y - Ywidth, ymax = Y + Ywidth,
+             fill = feature,
+             color = feature)) +
+  geom_rect(data = array1 |> filter(feature == 'Deletion')) +
+
+  geom_rect(data = array1 |> filter(feature == 'Spacer')) +
+  geom_rect(data = array1 |> filter(feature == 'Repeat')) +
+  theme(legend.title = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+          panel.border = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x = element_text(size = 15, face = 'bold'),
+          legend.background = element_rect(fill = "transparent", color = NA),
+          axis.ticks.length = unit(0.5, "cm"),
+          axis.minor.ticks.length = rel(0.5),
+          legend.position = 'bottom') +
+      
+      scale_fill_manual(values = c('Deletion' = ct[1], 'Spacer' = 'black', 'Repeat' = 'gray')) + 
+      scale_color_manual(values = c('Deletion' = ct[1], 'Spacer' = 'black', 'Repeat' = 'gray')) + 
+      scale_x_continuous(
+                       limits = c(min(array1$start) - 10, (max(array1$end1) + (max(array2$end1) - min(array2$start)) - (max(array1$end1) - min(array1$start)))),
+                       labels = label_comma(),
+                       breaks = seq(min(array1$start) + 44, max(array1$end1) + 1, by = 100),
+                       minor_breaks = seq(min(array1$start) + 4, max(array1$end1) + 1, by = 10),
+                       guide = guide_axis(minor.ticks = TRUE),
+                       name = 'Genome Position') +
+
+    geom_text(data = array1 |> filter(Ylab == 'MA'),
+              aes(label = Ylab, x = min(array1$start) - 3, y = Y), size = 6, color = 'black',  hjust = 1, fontface = 'bold') +
+    geom_text(data = array1 |> filter(Ylab == 'Ancestor'),
+              aes(label = Ylab, x = min(array1$start) - 3, y = Y), size = 6, color = 'black',  hjust = 1, fontface = 'bold') +
+      coord_cartesian(clip = "off") 
+  
+array1_plot + canvas(width = 18, height = 2.5, units = 'in')
+array2_plot + canvas(width = 18, height = 2.5, units = 'in')
+
+```
+
+## Supplementary Tables
+
+```{r}
+indel_values <- 
+  small_mutation_table |>
+  filter(!complex_mutation) |>
+  dplyr::select(species, line, mut_type) |>
+  # add count for observed mutations
+  mutate(mut_counter = 1) |>
+  # add empty mutation rows to catch 0s
+    rbind(expand.grid(line = all_lines, mut_type = c('SNM', 'DEL', 'INS')) |>
+          mutate(species = case_when(grepl('9105', line) ~ 'L. acidophilus',
+                                     grepl('8855', line) ~ 'L. crispatus',
+                                     grepl('9106', line) ~ 'L. lactis',
+                                     TRUE ~ NA),
+                 mut_counter = 0)) |>
+  summarise(mut_total = sum(mut_counter), .by = c(species, line, mut_type)) |>
+  rowwise() |>
+  mutate(rate_per_site = mut_total / oget(substring(species, 4, 4), '_generations') / oget(substring(species, 4, 4), '_genome_length')) |>
+  ungroup() |>
+  pivot_wider(names_from = mut_type, values_from = c(mut_total, rate_per_site))
+
+
+snm_values <-
+  small_mutation_table |>
+  filter(!complex_mutation, mut_type == 'SNM') |>
+  dplyr::select(species, line, SNM_type) |>
+  # add count for observed mutations
+  mutate(mut_counter = 1) |>
+  # add empty mutation rows to catch 0s
+   rbind(expand.grid(line = all_lines,
+                SNM_type = c("G:C > A:T", "A:T > G:C", "A:T > T:A", "A:T > C:G", "G:C > T:A", "G:C > C:G")) |>
+          mutate(species = case_when(grepl('9105', line) ~ 'L. acidophilus',
+                                     grepl('8855', line) ~ 'L. crispatus',
+                                     grepl('9106', line) ~ 'L. lactis',
+                                     TRUE ~ NA),
+           mut_counter = 0)) |>
+  summarise(mut_total = sum(mut_counter), .by = c(species, line, SNM_type)) |>
+  rowwise() |>
+  mutate(rate_per_site = 
+           case_when(substring(SNM_type, 1, 3) == 'G:C' ~ mut_total / oget(substring(species, 4, 4), '_generations') / (oget(substring(species, 4, 4), '_genome_length') * oget(substring(species, 4, 4), '_gc')),
+                   substring(SNM_type, 1, 3) == 'A:T' ~ mut_total / oget(substring(species, 4, 4), '_generations') / (oget(substring(species, 4, 4), '_genome_length') * (1 - oget(substring(species, 4, 4), '_gc'))))) |>
+  ungroup() |>
+  pivot_wider(names_from = SNM_type, values_from = c(mut_total, rate_per_site))
+
+table_S1 <-
+  full_join(indel_values, snm_values, by = c('species', 'line')) |>
+  arrange(species, line) |>
+  dplyr::rename(Species = species,
+                Line = line,
+                'Total SNM' = mut_total_SNM,
+                'Total INS' = mut_total_INS,
+                'Total DEL' = mut_total_DEL,
+                'SNM Rate' = rate_per_site_SNM,
+                'INS Rate' = rate_per_site_INS,
+                'DEL Rate' = rate_per_site_DEL,
+                'Total G:C > A:T' = `mut_total_G:C > A:T`,
+                'Total A:T > G:C' = `mut_total_A:T > G:C`,
+                'Total A:T > T:A' = `mut_total_A:T > T:A`,
+                'Total G:C > C:G' = `mut_total_G:C > C:G`,
+                'Total G:C > T:A' = `mut_total_G:C > T:A`,
+                'Total A:T > C:G' = `mut_total_A:T > C:G`,
+                'G:C > A:T Rate' = `rate_per_site_G:C > A:T`,
+                'A:T > G:C Rate' = `rate_per_site_A:T > G:C`,
+                'A:T > T:A Rate' = `rate_per_site_A:T > T:A`,
+                'G:C > C:G Rate' = `rate_per_site_G:C > C:G`,
+                'G:C > T:A Rate' = `rate_per_site_G:C > T:A`,
+                'A:T > C:G Rate' = `rate_per_site_A:T > C:G`) |>
+  dplyr::select(Species, Line,
+                `Total SNM`, `SNM Rate`,
+                `Total INS`, `INS Rate`,
+                `Total DEL`, `DEL Rate`,
+                `Total G:C > A:T`, `G:C > A:T Rate`,
+                `Total G:C > C:G`, `G:C > C:G Rate`,
+                `Total G:C > T:A`, `G:C > T:A Rate`,
+                `Total A:T > G:C`, `A:T > G:C Rate`,
+                `Total A:T > C:G`, `A:T > C:G Rate`,
+                `Total A:T > T:A`, `A:T > T:A Rate`
+                ) |>
+    mutate(Species = case_when(Species == 'L. acidophilus' ~ 'Lb. acidophilus',
+                             Species == 'L. crispatus' ~ 'Lb. crispatus',
+                             Species == 'L. lactis' ~ 'Lc. lactis'))
+```
+
+## Table 1
+
+```{r}
+table_1 <-
+   data.frame(Species = c('Lb. acidophilus', 'Lb. crispatus', 'Lc. lactis'),
+             s = c('a', 'c', 'l'))  |>
+  rowwise() |>
+  mutate(`Chromosome Size` = oget(s, '_genome_length'), # do not include lactis plasmids in analyzed sites
+         `GC Content (%)` = oget(s, '_gc'),
+         `Effective Population Size` = fig_2c_data$Ne[which(substring(fig_2c_data$sp, 5, 5) == s & fig_2c_data$this_MA)],
+         `Number of MA Lines` = length(oget(s, '_line_names')),
+         `Number of Transfer Bottlenecks` = 50,
+         `Number of MA Generations` = oget(s, '_generations')) |>
+  ungroup() |>
+  full_join(fig_2a_data |>
+              filter(type == 'SNM') |>
+              dplyr::select(-Species, -type) |>
+              dplyr::rename(s = species) |>
+              pivot_wider(values_from = c(mean, sem), names_from = mut_type),
+            by = 's') |>
+  full_join(table_S1 |>
+  summarise(`Total SNM` = sum(`Total SNM`),
+            `Total INS` = sum(`Total INS`),
+            `Total DEL` = sum(`Total DEL`),
+            .by = Species),
+  by = 'Species') |>
+  full_join(fig_4a_data |> dplyr::select(species, mut_type, mean, sem) |> pivot_wider(names_from = mut_type, values_from = c(mean, sem)) |> dplyr::rename(s = species), by = 's') |> 
+    dplyr::select(-s, -contains(c('indel', 'INDEL'))) |>
+    dplyr::rename_with(.fn = function(name) {name |> str_replace_all("mean_", "") |> toupper() |> str_replace_all("_PER_SITE_PER_GEN", " Rate (per Site per Generation)") },
+                       .cols = starts_with('mean_')) |>
+  dplyr::rename_with(.fn = function(name) {name |> str_replace_all("sem_", "") |> toupper() |> str_replace_all("_PER_SITE_PER_GEN", " Rate SE") },
+                       .cols = starts_with('sem_')) |>
+  mutate(across(contains('Rate'), ~ signif(.x, 3)),
+         `GC Content (%)` = signif(`GC Content (%)` * 100, 3),
+         `Effective Population Size` = signif(`Effective Population Size`, 3)) |>
+  dplyr::select(Species, `Chromosome Size`, `GC Content (%)`,
+                `Effective Population Size` ,`Number of MA Lines`, `Number of Transfer Bottlenecks`,
+                `Total SNM`, `SNM Rate (per Site per Generation)`, `SNM Rate SE`,
+                `Total INS`, `INS Rate (per Site per Generation)`, `INS Rate SE`,
+                `Total DEL`, `DEL Rate (per Site per Generation)`, `DEL Rate SE`)
+```
+
+```{r sup_figs}
+fig_S2 <-
+  fig_3b_data |>
+  mutate(species = case_when(species == 'a' ~ 'Lb. acidophilus',
+                             species == 'c' ~ 'Lb. crispatus',
+                             species == 'l' ~ 'Lc. lactis')) |>
+  ggplot(mapping = aes(x = dist_to_oriC_1, y = snm_rate, fill = snm_type, color = snm_type)) +
+    geom_point(aes(shape = snm_type), color = 'black') +
+  #geom_point(data = fig_1c_data |> filter(snm_type != "G:C > A:T"), shape = 21, color = 'black') +
+  #geom_point(data = fig_1c_data |> filter(snm_type == "G:C > A:T"), shape = 22, color = 'black') +
+  geom_smooth(method = 'gam') +
+  
+  #scale_y_continuous(breaks = c(0, 2.5e-8, 5.0e-8, 7.5e-8), labels = expression(0, 2.5%*%10^-8, 5.0%*%10^-8, 7.5%*%10^-8)) +
+  scale_x_continuous(breaks = c(0, 500000, 1000000, 1500000, 2000000, 2500000, 3000000)) +
+  scale_shape_manual(values = c(21, 21, 21, 22, 21, 21)) +
+  scale_fill_manual(values = c(
+ "G:C > A:T" = ct[2],
+ "A:T > G:C" = ct[7],
+"A:T > T:A" = ct[3],
+"A:T > C:G" = ct[8],
+"G:C > T:A" = ct[5],
+"G:C > C:G" = ct[1])) +
+   scale_color_manual(values = c(
+ "G:C > A:T" = ct[2],
+ "A:T > G:C" = ct[7],
+"A:T > T:A" = ct[3],
+"A:T > C:G" = ct[8],
+"G:C > T:A" = ct[5],
+"G:C > C:G" = ct[1]), guide = 'none') +
+  labs(x = 'Distance to oriC (kb)',
+       y = 'SNM / Site / Generation',
+       fill = 'SNM Type',
+       shape = 'SNM Type') +
+  theme(legend.position = c(0.8, 0.2),
+        aspect.ratio = 1,
+        legend.background = element_rect(color = 'black'),
+        strip.text = element_text(face = "bold.italic")) +
+  guides(fill = guide_legend(override.aes = list(size = 5, linewidth = 0))) +
+  facet_wrap(~species, nrow = 2, scales = 'free')
+fig_S2 + canvas(8,7)
+
+```
+
+# Output Figures
+
+```{r}
+fig_1  + canvas(20, 7)
+
+fig_2a + canvas(11, 5)
+fig_2b + theme(legend.position = 'none') + canvas(5, 5, 'in')
+fig_2b + canvas(15, 5, 'in')
+fig_2c + canvas(15, 5, 'in')
+fig_2c + theme(legend.position = 'none') + canvas(5, 5, 'in')
+
+fig_3a + canvas(width = 10, height = 10, units = 'in')
+fig_3b + canvas(8,8)
+fig_3c + canvas(7,5)
+fig_3d + canvas(5,5)
+
+fig_4a + canvas(width = 7, height = 5, units = 'in')
+fig_4b + canvas(width = 7, height = 5, units = 'in')
+array1_plot + canvas(width = 18, height = 2.5, units = 'in')
+array2_plot + canvas(width = 18, height = 2.5, units = 'in')
+
+
+# #
+# ggplot2::ggsave(filename = here('plots', 'fig_1.pdf'), plot = fig_1, device = 'pdf', width = 20, height = 7, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_2a.pdf'), plot = fig_2a, device = 'pdf', width = 11, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_2b_legend.pdf'), plot = fig_2b, device = 'pdf', width = 15, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_2b_noLegend.pdf'), plot = fig_2b + theme(legend.position = 'none') , device = 'pdf', width = 5, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_2c_legend.pdf'), plot = fig_2c, device = 'pdf', width = 15, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_2c_noLegend.pdf'), plot = fig_2c + theme(legend.position = 'none'), device = 'pdf', width = 5, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_3a.pdf'), plot = fig_3a, device = 'pdf', width = 10, height = 10, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_3b.pdf'), plot = fig_3b, device = 'pdf', width = 8, height = 8, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_3c.pdf'), plot = fig_3c, device = 'pdf', width = 7, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_3d.pdf'), plot = fig_3d, device = 'pdf', width = 5, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_4a.pdf'), plot = fig_4a, device = 'pdf', width = 7, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'fig_4b.pdf'), plot = fig_4b, device = 'pdf', width = 7, height = 5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'crispr_array1_plot.pdf'), plot = array1_plot, device = 'pdf', width = 18, height = 2.5, units = 'in')
+# ggplot2::ggsave(filename = here('plots', 'crispr_array2_plot.pdf'), plot = array2_plot, device = 'pdf', width = 18, height = 2.5, units = 'in')
+# #
+# ggsave(filename = here('Figures', 'Figure_S2_oriCbias.pdf'),
+#        plot = fig_S2,
+#        device = 'pdf',
+#        width = 8,
+#        height = 7,
+#        units = 'in')
+
+# write.csv(x = table_S1,
+#           file = here('paper_tables', 'table_S1.csv'),
+#           row.names = FALSE)
+# write.csv(x = table_1,
+#           file = here('paper_tables', 'table_1.csv'),
+#           row.names = FALSE)
+
+```
